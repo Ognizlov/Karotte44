@@ -1,0 +1,27 @@
+{
+  "name": "pump-paper-bot",
+  "version": "1.0.0",
+  "description": "Hi GAYYS",
+  "main": "index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "mock": "MOCK=1 node src/index.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Ognizlov/Karotte44.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Ognizlov/Karotte44/issues"
+  },
+  "homepage": "https://github.com/Ognizlov/Karotte44#readme",
+  "dependencies": {
+    "express": "^5.3.0",
+    "https-proxy-agent": "^9.1.0",
+    "ws": "^8.23.0"
+  },
+  "private": true
+}

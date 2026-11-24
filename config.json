@@ -1,0 +1,33 @@
+{
+  "wsUrl": "wss://pumpportal.fun/api/data",
+  "dashboardPort": 3000,
+  "startCapital": 2.0,
+  "totalSupply": 1000000000,
+  "scout": { "maxWatching": 60 },
+  "filter": {
+    "observeSeconds": 30,
+    "maxDevInitialBuyPct": 8,
+    "maxTop10HolderPct": 30,
+    "rejectIfDevSells": true
+  },
+  "analyst": {
+    "minScore": 0.6,
+    "weights": { "uniqueBuyers": 0.3, "buySellRatio": 0.25, "volume": 0.25, "priceChange": 0.2 },
+    "targets": { "uniqueBuyers": 20, "buySellRatio": 3, "volumeSol": 10, "priceChangePct": 50 }
+  },
+  "executor": {
+    "positionSizePct": 8,
+    "feePct": 1,
+    "priorityFeeSol": 0.0005,
+    "delayMs": 1500,
+    "maxOpenPositions": 5
+  },
+  "risk": {
+    "stopLossPct": -6,
+    "trailingActivationPct": 12,
+    "trailingDistancePct": 5,
+    "maxHoldMinutes": 10,
+    "checkIntervalMs": 1000
+  },
+  "logger": { "tradesCsv": "trades.csv", "logFile": "log.txt", "memoryLines": 300 }
+}

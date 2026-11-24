@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pump Paper Bot</title>
+<style>
+:root{--bg:#0b0e14;--panel:#131824;--line:#232a3a;--txt:#d7dce6;--mut:#7d869a;--acc:#7c5cff;--up:#22c55e;--dn:#ef4444;--warn:#f59e0b}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.45 ui-sans-serif,system-ui,sans-serif}
+header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid var(--line)}
+h1{font-size:17px;margin:0}.tag{font-size:11px;padding:2px 8px;border-radius:99px;background:#2a1f55;color:#b9a8ff;margin-left:8px}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;background:var(--dn)}.dot.on{background:var(--up)}
+main{display:grid;gap:14px;padding:16px;grid-template-columns:2fr 1fr;max-width:1500px;margin:auto}
+@media(max-width:900px){main{grid-template-columns:1fr}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;min-width:0}
+.card h2{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--mut);margin:0 0 10px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;grid-column:1/-1}
+.kpi .v{font-size:22px;font-weight:600;font-variant-numeric:tabular-nums}.kpi .l{color:var(--mut);font-size:12px}
+canvas{width:100%;height:260px;display:block}
+.agents{display:grid;gap:8px}.agent{display:grid;grid-template-columns:90px 1fr;gap:4px 10px;padding:8px;border:1px solid var(--line);border-radius:8px}
+.agent b{color:#b9a8ff}.agent .s{color:var(--mut);font-size:12px}.agent .la{grid-column:1/-1;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+table{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:tabular-nums}td,th{padding:5px 6px;border-bottom:1px solid var(--line);text-align:left}th{color:var(--mut);font-weight:500}
+.up{color:var(--up)}.dn{color:var(--dn)}
+#log{height:360px;overflow:auto;font:12px/1.5 ui-monospace,Menlo,monospace;background:#0a0d13;border-radius:8px;padding:8px}
+#log div{white-space:pre-wrap;word-break:break-all}.m{color:#b9a8ff}.warn{color:var(--warn)}.error{color:var(--dn)}.t{color:var(--mut)}
+.wide{grid-column:1/-1}
+</style></head><body>
+<header><div><h1>Pump.fun Paper-Trading Bot<span class="tag">SIMULATION – kein Wallet</span></h1></div>
+<div><span id="conn"><span class="dot"></span>offline</span> · <span id="up" class="t"></span></div></header>
+<main>
+<section class="kpis">
+ <div class="card kpi"><div class="l">Equity</div><div class="v" id="eq">-</div></div>
+ <div class="card kpi"><div class="l">PnL</div><div class="v" id="pnl">-</div></div>
+ <div class="card kpi"><div class="l">Cash</div><div class="v" id="cash">-</div></div>
+ <div class="card kpi"><div class="l">Trades / Winrate</div><div class="v" id="wr">-</div></div>
+ <div class="card kpi"><div class="l">Beobachtet</div><div class="v" id="watch">-</div></div>
+</section>
+<div class="card"><h2>Equity-Kurve (SOL)</h2><canvas id="chart"></canvas></div>
+<div class="card"><h2>Agenten</h2><div class="agents" id="agents"></div></div>
+<div class="card"><h2>Offene Positionen</h2><table><thead><tr><th>Token</th><th>Einsatz</th><th>PnL</th><th>Haltezeit</th><th>Trail</th></tr></thead><tbody id="pos"></tbody></table></div>
+<div class="card"><h2>Geschlossene Trades</h2><div style="max-height:260px;overflow:auto"><table><thead><tr><th>Token</th><th>PnL</th><th>Grund</th></tr></thead><tbody id="closed"></tbody></table></div></div>
+<div class="card wide"><h2>Live-Log</h2><div id="log"></div></div>
+</main>
+<script>
+const $=id=>document.getElementById(id), f=(x,d=4)=>Number(x).toFixed(d), esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const cls=v=>v>=0?'up':'dn', mmss=s=>`${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
+function draw(pts,start){const c=$('chart'),r=devicePixelRatio||1,w=c.clientWidth,h=c.clientHeight;c.width=w*r;c.height=h*r;const g=c.getContext('2d');g.scale(r,r);g.clearRect(0,0,w,h);
+ if(pts.length<2)return;const L=50,B=20,vs=pts.map(p=>p.v);let lo=Math.min(...vs,start),hi=Math.max(...vs,start);if(hi-lo<1e-6){hi+=.01;lo-=.01}
+ const t0=pts[0].t,t1=pts[pts.length-1].t,X=t=>L+(t-t0)/(t1-t0||1)*(w-L-8),Y=v=>8+(hi-v)/(hi-lo)*(h-B-8);
+ g.strokeStyle='#232a3a';g.fillStyle='#7d869a';g.font='11px sans-serif';for(let i=0;i<=4;i++){const v=lo+(hi-lo)*i/4,y=Y(v);g.beginPath();g.moveTo(L,y);g.lineTo(w,y);g.stroke();g.fillText(f(v,3),4,y+4)}
+ g.setLineDash([4,4]);g.strokeStyle='#7d869a';g.beginPath();g.moveTo(L,Y(start));g.lineTo(w,Y(start));g.stroke();g.setLineDash([]);
+ const up=vs[vs.length-1]>=start,col=up?'#22c55e':'#ef4444';const gr=g.createLinearGradient(0,0,0,h);gr.addColorStop(0,up?'rgba(34,197,94,.25)':'rgba(239,68,68,.25)');gr.addColorStop(1,'rgba(0,0,0,0)');
+ g.beginPath();pts.forEach((p,i)=>i?g.lineTo(X(p.t),Y(p.v)):g.moveTo(X(p.t),Y(p.v)));g.strokeStyle=col;g.lineWidth=2;g.stroke();
+ g.lineTo(X(t1),h-B);g.lineTo(X(t0),h-B);g.closePath();g.fillStyle=gr;g.fill();
+ g.fillStyle='#7d869a';g.fillText(new Date(t0).toLocaleTimeString(),L,h-4);const e=new Date(t1).toLocaleTimeString();g.fillText(e,w-g.measureText(e).width-4,h-4)}
+function addLog(l){const d=document.createElement('div'),box=$('log'),stick=box.scrollTop+box.clientHeight>=box.scrollHeight-20;
+ d.innerHTML=`<span class="t">${l.t.slice(11,19)}</span> <span class="m">[${esc(l.module)}]</span> <span class="${l.level}">${esc(l.msg)}</span>`;box.appendChild(d);while(box.children.length>400)box.firstChild.remove();if(stick)box.scrollTop=box.scrollHeight}
+let last;async function refresh(){try{const s=await (await fetch('/api/state')).json();last=s;
+ $('conn').innerHTML=`<span class="dot ${s.connected?'on':''}"></span>${s.connected?'verbunden':'offline'} · ${s.msgCount} Msgs${s.mock?' · <b class="warn">MOCK-DATEN</b>':''}${s.tradesBlocked?' · <b class="error">Trades gesperrt: API-Key fehlt</b>':''}`;$('up').textContent='Uptime '+mmss(s.uptimeS);
+ const p=s.equity-s.startCapital;$('eq').textContent=f(s.equity)+' SOL';$('pnl').innerHTML=`<span class="${cls(p)}">${p>=0?'+':''}${f(p)} (${f(p/s.startCapital*100,2)}%)</span>`;
+ $('cash').textContent=f(s.cash)+' SOL';$('wr').textContent=`${s.stats.trades} / ${f(s.stats.winRate*100,0)}%`;$('watch').textContent=s.stats.watching;
+ $('agents').innerHTML=Object.entries(s.agents).map(([k,a])=>`<div class="agent"><b>${k}</b><span class="s">${esc(a.state)} · ${a.count} Aktionen</span><span class="la">${esc(a.last)}</span></div>`).join('');
+ $('pos').innerHTML=s.positions.map(x=>`<tr><td>${esc(x.symbol)}</td><td>${f(x.costSol)}</td><td class="${cls(x.pnlPct)}">${f(x.pnlPct,1)}%</td><td>${mmss(x.heldS)}</td><td>${x.trailing?'✓':''}</td></tr>`).join('')||'<tr><td colspan=5 class="t">keine</td></tr>';
+ $('closed').innerHTML=s.closed.map(x=>`<tr><td>${esc(x.symbol)}</td><td class="${cls(x.pnl)}">${x.pnl>=0?'+':''}${f(x.pnl)} (${f(x.pnlPct,1)}%)</td><td class="t">${esc(x.reason)}</td></tr>`).join('')||'<tr><td colspan=3 class="t">noch keine</td></tr>';
+ draw([...s.equityCurve,{t:Date.now(),v:s.equity}],s.startCapital)}catch(e){$('conn').innerHTML='<span class="dot"></span>Dashboard getrennt'}}
+fetch('/api/state').then(r=>r.json()).then(s=>s.log.forEach(addLog));
+new EventSource('/api/stream').onmessage=e=>addLog(JSON.parse(e.data));
+refresh();setInterval(refresh,2000);addEventListener('resize',()=>last&&refresh());
+</script></body></html>
