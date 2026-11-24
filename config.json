@@ -3,7 +3,9 @@
   "dashboardPort": 3000,
   "startCapital": 2.0,
   "totalSupply": 1000000000,
-  "scout": { "maxWatching": 60 },
+  "scout": {
+    "maxWatching": 150
+  },
   "filter": {
     "observeSeconds": 30,
     "maxDevInitialBuyPct": 8,
@@ -11,9 +13,19 @@
     "rejectIfDevSells": true
   },
   "analyst": {
-    "minScore": 0.6,
-    "weights": { "uniqueBuyers": 0.3, "buySellRatio": 0.25, "volume": 0.25, "priceChange": 0.2 },
-    "targets": { "uniqueBuyers": 20, "buySellRatio": 3, "volumeSol": 10, "priceChangePct": 50 }
+    "minScore": 0.45,
+    "weights": {
+      "uniqueBuyers": 0.3,
+      "buySellRatio": 0.25,
+      "volume": 0.25,
+      "priceChange": 0.2
+    },
+    "targets": {
+      "uniqueBuyers": 12,
+      "buySellRatio": 3,
+      "volumeSol": 5,
+      "priceChangePct": 50
+    }
   },
   "executor": {
     "positionSizePct": 8,
@@ -29,5 +41,9 @@
     "maxHoldMinutes": 10,
     "checkIntervalMs": 1000
   },
-  "logger": { "tradesCsv": "trades.csv", "logFile": "log.txt", "memoryLines": 300 }
+  "logger": {
+    "tradesCsv": "trades.csv",
+    "logFile": "log.txt",
+    "memoryLines": 300
+  }
 }
