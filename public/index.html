@@ -21,6 +21,9 @@ table{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:ta
 #log{height:360px;overflow:auto;font:12px/1.5 ui-monospace,Menlo,monospace;background:#0a0d13;border-radius:8px;padding:8px}
 #log div{white-space:pre-wrap;word-break:break-all}.m{color:#b9a8ff}.warn{color:var(--warn)}.error{color:var(--dn)}.t{color:var(--mut)}
 .wide{grid-column:1/-1}
+button{margin-top:12px;background:var(--acc);color:#fff;border:0;border-radius:8px;padding:8px 14px;font:inherit;cursor:pointer}button:disabled{opacity:.5;cursor:default}
+.tuned{font-size:11px;padding:1px 6px;border-radius:99px;background:#2a1f55;color:#b9a8ff;margin-left:6px}
+.opt td:first-child{color:var(--mut)}
 </style></head><body>
 <header><div><h1>Pump.fun Paper-Trading Bot<span class="tag">SIMULATION – kein Wallet</span></h1></div>
 <div><span id="conn"><span class="dot"></span>offline</span> · <span id="up" class="t"></span></div></header>
@@ -30,12 +33,17 @@ table{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:ta
  <div class="card kpi"><div class="l">PnL</div><div class="v" id="pnl">-</div></div>
  <div class="card kpi"><div class="l">Cash</div><div class="v" id="cash">-</div></div>
  <div class="card kpi"><div class="l">Trades / Winrate</div><div class="v" id="wr">-</div></div>
+ <div class="card kpi"><div class="l">Trades letzte Std.</div><div class="v" id="tph">-</div></div>
  <div class="card kpi"><div class="l">Beobachtet</div><div class="v" id="watch">-</div></div>
+ <div class="card kpi"><div class="l">Datenkosten 24h (echt)</div><div class="v" id="cost">-</div><div class="l" id="costsub"></div></div>
 </section>
 <div class="card"><h2>Equity-Kurve (SOL)</h2><canvas id="chart"></canvas></div>
 <div class="card"><h2>Agenten</h2><div class="agents" id="agents"></div></div>
-<div class="card"><h2>Offene Positionen</h2><table><thead><tr><th>Token</th><th>Einsatz</th><th>PnL</th><th>Haltezeit</th><th>Trail</th></tr></thead><tbody id="pos"></tbody></table></div>
+<div class="card"><h2>Offene Positionen</h2><table><thead><tr><th>Token</th><th>Einsatz</th><th>PnL netto</th><th>Haltezeit</th><th>Trail</th></tr></thead><tbody id="pos"></tbody></table></div>
 <div class="card"><h2>Geschlossene Trades</h2><div style="max-height:260px;overflow:auto"><table><thead><tr><th>Token</th><th>PnL</th><th>Grund</th></tr></thead><tbody id="closed"></tbody></table></div></div>
+<div class="card"><h2>Optimizer</h2><div id="opt" class="t">-</div>
+ <button id="optbtn" onclick="runOpt()">Jetzt optimieren</button></div>
+<div class="card"><h2>Strategie (aktiv)</h2><table><tbody id="strat"></tbody></table><div class="t" id="stratsub" style="margin-top:8px;font-size:12px"></div></div>
 <div class="card wide"><h2>Live-Log</h2><div id="log"></div></div>
 </main>
 <script>
@@ -50,12 +58,28 @@ function draw(pts,start){const c=$('chart'),r=devicePixelRatio||1,w=c.clientWidt
  g.beginPath();pts.forEach((p,i)=>i?g.lineTo(X(p.t),Y(p.v)):g.moveTo(X(p.t),Y(p.v)));g.strokeStyle=col;g.lineWidth=2;g.stroke();
  g.lineTo(X(t1),h-B);g.lineTo(X(t0),h-B);g.closePath();g.fillStyle=gr;g.fill();
  g.fillStyle='#7d869a';g.fillText(new Date(t0).toLocaleTimeString(),L,h-4);const e=new Date(t1).toLocaleTimeString();g.fillText(e,w-g.measureText(e).width-4,h-4)}
+const LBL={minScore:['Min. Score',''],minUniqueBuyers:['Min. Käufer',''],maxPriceChangePct:['Max. Δ bei Einstieg','%'],stopLossPct:['Stop-Loss','%'],takeProfitPct:['Take-Profit','%'],trailingActivationPct:['Trailing ab','%'],trailingDistancePct:['Trailing-Abstand','%'],maxHoldMinutes:['Max. Haltezeit',' min'],stallExitSeconds:['Exit ohne Trades nach',' s']};
+function renderStrategy(st){$('strat').innerHTML=Object.entries(st.params).map(([k,v])=>`<tr><td>${LBL[k][0]}</td><td>${v===0&&k!=='stopLossPct'?'aus':v+LBL[k][1]}${st.tunedKeys.includes(k)?'<span class="tuned">optimiert</span>':''}</td></tr>`).join('');
+ $('stratsub').textContent=st.tunedAt?'Optimiert am '+new Date(st.tunedAt).toLocaleString():'Startwerte aus config.json (noch nicht optimiert)'}
+const row=(n,x)=>x?`<tr><td>${n}</td><td>${x.n}</td><td class="${cls(x.avgPct)}">${f(x.avgPct,2)}%</td><td>${f(x.winRate*100,0)}%</td><td class="${cls(x.solAt8pct)}">${x.solAt8pct>=0?'+':''}${f(x.solAt8pct,3)}</td></tr>`:'';
+function renderOpt(o,r){$('optbtn').disabled=o.running;const rep=o.report;let h=`Aufgezeichnete Kandidaten: <b>${r.recorded}</b> (+${r.active} laufend) · Ziel: ${o.minTrades}<br>`;
+ if(o.running)h+='Rechnet…';else if(!rep)h+='Noch kein Lauf – erster automatischer Lauf 10 min nach Start, dann alle 30 min.';
+ else if(rep.status!=='ok')h+=`Letzter Lauf ${new Date(rep.at).toLocaleTimeString()}: ${esc(rep.reason)}`;
+ else{h+=`Letzter Lauf ${new Date(rep.at).toLocaleTimeString()} · ${f(rep.hours,1)} h Daten · <b class="${rep.recommended?'up':'warn'}">${rep.recommended?'übernommen':'nicht übernommen'}</b>: ${esc(rep.reason)}
+ <table class="opt" style="margin-top:8px"><thead><tr><th></th><th>Trades</th><th>Ø Trade</th><th>Win</th><th>Summe SOL*</th></tr></thead><tbody>
+ ${row('Aktuell',rep.current.all)}${rep.best?row('Optimiert',rep.best.all)+row('… nur Testzeit',rep.best.test):''}</tbody></table>
+ <div style="font-size:12px;margin-top:6px">* hochgerechnet mit 8 % von 2 SOL pro Trade, Gebühren und 1,5 s Verzögerung inklusive</div>`}
+ $('opt').innerHTML=h}
+async function runOpt(){$('optbtn').disabled=true;await fetch('/api/optimize',{method:'POST'});setTimeout(refresh,1500)}
 function addLog(l){const d=document.createElement('div'),box=$('log'),stick=box.scrollTop+box.clientHeight>=box.scrollHeight-20;
  d.innerHTML=`<span class="t">${l.t.slice(11,19)}</span> <span class="m">[${esc(l.module)}]</span> <span class="${l.level}">${esc(l.msg)}</span>`;box.appendChild(d);while(box.children.length>400)box.firstChild.remove();if(stick)box.scrollTop=box.scrollHeight}
 let last;async function refresh(){try{const s=await (await fetch('/api/state')).json();last=s;
  $('conn').innerHTML=`<span class="dot ${s.connected?'on':''}"></span>${s.connected?'verbunden':'offline'} · ${s.msgCount} Msgs${s.mock?' · <b class="warn">MOCK-DATEN</b>':''}${s.tradesBlocked?' · <b class="error">Trades gesperrt: API-Key fehlt</b>':''}`;$('up').textContent='Uptime '+mmss(s.uptimeS);
  const p=s.equity-s.startCapital;$('eq').textContent=f(s.equity)+' SOL';$('pnl').innerHTML=`<span class="${cls(p)}">${p>=0?'+':''}${f(p)} (${f(p/s.startCapital*100,2)}%)</span>`;
  $('cash').textContent=f(s.cash)+' SOL';$('wr').textContent=`${s.stats.trades} / ${f(s.stats.winRate*100,0)}%`;$('watch').textContent=s.stats.watching;
+ $('tph').textContent=s.stats.tradesLastHour;
+ const u=s.usage;$('cost').textContent=f(u.cost24h,4)+' SOL';$('costsub').textContent=`${u.msgs24h} Msgs/24h · ${u.msgs1h}/h · Budget ${u.budget} SOL/Tag`;
+ renderStrategy(s.strategy);renderOpt(s.optimizer,s.research);
  $('agents').innerHTML=Object.entries(s.agents).map(([k,a])=>`<div class="agent"><b>${k}</b><span class="s">${esc(a.state)} · ${a.count} Aktionen</span><span class="la">${esc(a.last)}</span></div>`).join('');
  $('pos').innerHTML=s.positions.map(x=>`<tr><td>${esc(x.symbol)}</td><td>${f(x.costSol)}</td><td class="${cls(x.pnlPct)}">${f(x.pnlPct,1)}%</td><td>${mmss(x.heldS)}</td><td>${x.trailing?'✓':''}</td></tr>`).join('')||'<tr><td colspan=5 class="t">keine</td></tr>';
  $('closed').innerHTML=s.closed.map(x=>`<tr><td>${esc(x.symbol)}</td><td class="${cls(x.pnl)}">${x.pnl>=0?'+':''}${f(x.pnl)} (${f(x.pnlPct,1)}%)</td><td class="t">${esc(x.reason)}</td></tr>`).join('')||'<tr><td colspan=3 class="t">noch keine</td></tr>';

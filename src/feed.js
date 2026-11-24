@@ -34,8 +34,8 @@ class Feed extends EventEmitter {
       this.msgCount++;
       if (m.message) {
         if (/api key/i.test(m.message)) {
-          if (!this.warnedKey) this.logger.log('feed', `PumpPortal: ${m.message} → PUMPPORTAL_API_KEY setzen, sonst keine Trade-Daten`, 'error');
-          this.warnedKey = true; this.tradesBlocked = true; this.emit('status');
+          if (!this.tradesBlocked) this.logger.log('feed', `PumpPortal: ${m.message} → API-Key fehlt oder Wallet unter 0,02 SOL – keine Trade-Daten`, 'error');
+          this.tradesBlocked = true; this.emit('status');
         }
         return;
       }

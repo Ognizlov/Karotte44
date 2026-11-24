@@ -14,6 +14,8 @@
   },
   "analyst": {
     "minScore": 0.45,
+    "minUniqueBuyers": 0,
+    "maxPriceChangePct": 0,
     "weights": {
       "uniqueBuyers": 0.3,
       "buySellRatio": 0.25,
@@ -32,14 +34,35 @@
     "feePct": 1,
     "priorityFeeSol": 0.0005,
     "delayMs": 1500,
-    "maxOpenPositions": 5
+    "maxOpenPositions": 8
   },
   "risk": {
     "stopLossPct": -6,
-    "trailingActivationPct": 12,
-    "trailingDistancePct": 5,
-    "maxHoldMinutes": 10,
+    "takeProfitPct": 15,
+    "trailingActivationPct": 8,
+    "trailingDistancePct": 4,
+    "maxHoldMinutes": 3,
+    "stallExitSeconds": 45,
     "checkIntervalMs": 1000
+  },
+  "research": {
+    "enabled": true,
+    "horizonSeconds": 180
+  },
+  "optimizer": {
+    "auto": true,
+    "autoApply": true,
+    "firstRunMinutes": 10,
+    "everyMinutes": 30,
+    "lookbackHours": 48,
+    "minTrades": 40,
+    "minTradesPerHour": 5,
+    "trainFraction": 0.7,
+    "minTestT": 1.0
+  },
+  "dataCost": {
+    "solPer10kMessages": 0.01,
+    "maxSolPerDay": 0.05
   },
   "logger": {
     "tradesCsv": "trades.csv",

@@ -5,7 +5,9 @@
   "main": "index.js",
   "scripts": {
     "start": "node src/index.js",
-    "mock": "MOCK=1 node src/index.js"
+    "mock": "node src/index.js --mock",
+    "optimize": "node src/optimizer.js",
+    "optimize:apply": "node src/optimizer.js --apply"
   },
   "repository": {
     "type": "git",

@@ -13,7 +13,7 @@ class MockFeed extends EventEmitter {
     setInterval(() => { for (const s of this.mints.values()) if (Math.random() < s.activity) this.trade(s); }, 400);
   }
   newToken() {
-    const s = { mint: key(), dev: key(), vSol: 30, vTokens: 1073000000, traders: [], activity: rnd(0.1, 0.9),
+    const s = { mint: key(), dev: key(), vSol: 30, vTokens: 1073000000, traders: [], activity: Math.random() < 0.6 ? 0.01 : rnd(0.1, 0.9),
       drift: rnd(-0.35, 0.45), devDumps: Math.random() < 0.1 };
     const devSol = Math.random() < 0.2 ? rnd(2, 4) : rnd(0, 1.2);
     const tok = s.vTokens - (s.vSol * s.vTokens) / (s.vSol + devSol);
@@ -41,7 +41,7 @@ class MockFeed extends EventEmitter {
     }
     this.msgCount++;
     this.emit('trade', { txType: buy ? 'buy' : 'sell', mint: s.mint, traderPublicKey: pk, solAmount: sol, tokenAmount: tokens,
-      newTokenBalance: bal, vSolInBondingCurve: s.vSol, vTokensInBondingCurve: s.vTokens });
+      newTokenBalance: bal, pool: 'pump', vSolInBondingCurve: s.vSol, vTokensInBondingCurve: s.vTokens });
   }
   watch(mint) { if (this.pending && this.pending.mint === mint) this.mints.set(mint, this.pending); }
   unwatch(mint) { this.mints.delete(mint); }

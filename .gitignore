@@ -1,3 +1,5 @@
 node_modules/
 trades.csv
 log.txt
+data/
+.env
