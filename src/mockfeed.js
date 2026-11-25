@@ -5,7 +5,7 @@ const rnd = (a, b) => a + Math.random() * (b - a);
 const key = () => [...Array(44)].map(() => '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'[Math.floor(Math.random() * 58)]).join('');
 
 class MockFeed extends EventEmitter {
-  constructor(url, logger) { super(); this.logger = logger; this.mints = new Map(); this.connected = false; this.msgCount = 0; this.tradesBlocked = false; }
+  constructor(url, logger) { super(); this.logger = logger; this.mints = new Map(); this.connected = false; this.msgCount = 0; this.tradesBlocked = false; this.billed = false; }
   connect() {
     this.connected = true;
     this.logger.log('feed', 'MOCK-Feed aktiv – synthetische Daten, keine echten Marktdaten', 'warn');

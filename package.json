@@ -7,7 +7,8 @@
     "start": "node src/index.js",
     "mock": "node src/index.js --mock",
     "optimize": "node src/optimizer.js",
-    "optimize:apply": "node src/optimizer.js --apply"
+    "optimize:apply": "node src/optimizer.js --apply",
+    "check": "node src/check.js"
   },
   "repository": {
     "type": "git",

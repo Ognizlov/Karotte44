@@ -35,7 +35,7 @@ button{margin-top:12px;background:var(--acc);color:#fff;border:0;border-radius:8
  <div class="card kpi"><div class="l">Trades / Winrate</div><div class="v" id="wr">-</div></div>
  <div class="card kpi"><div class="l">Trades letzte Std.</div><div class="v" id="tph">-</div></div>
  <div class="card kpi"><div class="l">Beobachtet</div><div class="v" id="watch">-</div></div>
- <div class="card kpi"><div class="l">Datenkosten 24h (echt)</div><div class="v" id="cost">-</div><div class="l" id="costsub"></div></div>
+ <div class="card kpi"><div class="l" id="costlbl">Datenkosten 24h (echt)</div><div class="v" id="cost">-</div><div class="l" id="costsub"></div></div>
 </section>
 <div class="card"><h2>Equity-Kurve (SOL)</h2><canvas id="chart"></canvas></div>
 <div class="card"><h2>Agenten</h2><div class="agents" id="agents"></div></div>
@@ -78,7 +78,11 @@ let last;async function refresh(){try{const s=await (await fetch('/api/state')).
  const p=s.equity-s.startCapital;$('eq').textContent=f(s.equity)+' SOL';$('pnl').innerHTML=`<span class="${cls(p)}">${p>=0?'+':''}${f(p)} (${f(p/s.startCapital*100,2)}%)</span>`;
  $('cash').textContent=f(s.cash)+' SOL';$('wr').textContent=`${s.stats.trades} / ${f(s.stats.winRate*100,0)}%`;$('watch').textContent=s.stats.watching;
  $('tph').textContent=s.stats.tradesLastHour;
- const u=s.usage;$('cost').textContent=f(u.cost24h,4)+' SOL';$('costsub').textContent=`${u.msgs24h} Msgs/24h · ${u.msgs1h}/h · Budget ${u.budget} SOL/Tag`;
+ const u=s.usage,fd=s.feed;
+ if(fd.source==='solana'){$('costlbl').textContent='Daten (Solana, kostenlos)';$('cost').textContent=f(fd.coverage*100,1)+' %';
+  $('costsub').textContent=`Verbindung · ${fd.drops} Abbrüche · ${f(fd.tradesPerSec,0)} Trades/s · ≈ ${f(fd.trafficGBperHour,1)} GB/h`}
+ else if(fd.source==='mock'){$('costlbl').textContent='Daten';$('cost').textContent='Mock';$('costsub').textContent='synthetisch, kostenlos'}
+ else{$('costlbl').textContent='Datenkosten 24h (echt)';$('cost').textContent=f(u.cost24h,4)+' SOL';$('costsub').textContent=`PumpPortal · ${u.msgs24h} Msgs/24h · Budget ${u.budget} SOL/Tag`}
  renderStrategy(s.strategy);renderOpt(s.optimizer,s.research);
  $('agents').innerHTML=Object.entries(s.agents).map(([k,a])=>`<div class="agent"><b>${k}</b><span class="s">${esc(a.state)} · ${a.count} Aktionen</span><span class="la">${esc(a.last)}</span></div>`).join('');
  $('pos').innerHTML=s.positions.map(x=>`<tr><td>${esc(x.symbol)}</td><td>${f(x.costSol)}</td><td class="${cls(x.pnlPct)}">${f(x.pnlPct,1)}%</td><td>${mmss(x.heldS)}</td><td>${x.trailing?'✓':''}</td></tr>`).join('')||'<tr><td colspan=5 class="t">keine</td></tr>';

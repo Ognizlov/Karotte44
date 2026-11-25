@@ -4,7 +4,13 @@ const clamp01 = (x) => Math.max(0, Math.min(1, x));
 // Snapshot of what the Filter/Analyst look at after the observation window.
 function features(t, totalSupply) {
   const price = t.vSol / t.vTokens;
-  const top10 = [...t.balances.values()].sort((a, b) => b - a).slice(0, 10).reduce((s, x) => s + x, 0);
+  // Tokens sold by the curve that we cannot attribute to a wallet we saw (missed trades) count as ONE
+  // holder – conservative: unknown holdings could belong to a single sniper.
+  const bals = [...t.balances.values()].filter((x) => x > 0);
+  const known = bals.reduce((s, x) => s + x, 0);
+  const unknown = t.curveTokens0 ? Math.max(0, t.curveTokens0 - t.vTokens - known) : 0;
+  if (unknown > 0) bals.push(unknown);
+  const top10 = bals.sort((a, b) => b - a).slice(0, 10).reduce((s, x) => s + x, 0);
   return {
     buyers: t.buyers.size, buys: t.buys, sells: t.sells,
     ratio: t.sells === 0 ? t.buys : t.buys / t.sells,
@@ -12,6 +18,7 @@ function features(t, totalSupply) {
     priceChgPct: (price / t.startPrice - 1) * 100,
     devPct: (t.initialBuy / totalSupply) * 100,
     top10Pct: (top10 / totalSupply) * 100,
+    unknownPct: (unknown / totalSupply) * 100,
     devSold: t.devSold,
   };
 }

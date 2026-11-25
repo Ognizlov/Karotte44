@@ -1,5 +1,15 @@
 {
-  "wsUrl": "wss://pumpportal.fun/api/data",
+  "source": "solana",
+  "solana": {
+    "wsUrls": [
+      "wss://api.mainnet-beta.solana.com"
+    ],
+    "connections": 1,
+    "commitment": "confirmed"
+  },
+  "pumpportal": {
+    "wsUrl": "wss://pumpportal.fun/api/data"
+  },
   "dashboardPort": 3000,
   "startCapital": 2.0,
   "totalSupply": 1000000000,

@@ -10,6 +10,7 @@ class Feed extends EventEmitter {
     this.connected = false; this.backoff = 1000;
     this.msgCount = 0;
     this.tradesBlocked = false;
+    this.billed = true; // PumpPortal charges 0.01 SOL per 10,000 trade messages
   }
   agent() {
     const proxy = process.env.HTTPS_PROXY || process.env.https_proxy;

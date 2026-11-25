@@ -12,8 +12,9 @@ function loadEnv(root) {
   }
 }
 
-async function ensureApiKey(root) {
-  if (process.env.PUMPPORTAL_API_KEY || process.env.MOCK === '1' || !process.stdin.isTTY) return;
+async function ensureApiKey(root, cfg) {
+  // Only the paid PumpPortal source needs a key; the default Solana source is free.
+  if (cfg.source !== 'pumpportal' || process.env.PUMPPORTAL_API_KEY || process.env.MOCK === '1' || !process.stdin.isTTY) return;
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   const key = await new Promise((res) => rl.question(
     'PumpPortal API-Key eingeben (wird nur lokal in .env gespeichert, Enter = ohne Key): ', (a) => { rl.close(); res(a.trim()); }));

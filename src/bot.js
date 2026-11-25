@@ -3,7 +3,6 @@
 const path = require('path');
 const fs = require('fs');
 const { fork } = require('child_process');
-const Feed = process.env.MOCK === '1' ? require('./mockfeed') : require('./feed');
 const Logger = require('./logger');
 const Recorder = require('./recorder');
 const Usage = require('./usage');
@@ -22,7 +21,10 @@ class Bot {
     try { this.tuned = JSON.parse(fs.readFileSync(this.tunedPath, 'utf8')); } catch { this.tuned = null; }
     this.cfg = S.mergeConfig(baseCfg, this.tuned); // live parameters
     this.logger = new Logger(baseCfg.logger, root);
-    this.feed = new Feed(baseCfg.wsUrl, this.logger);
+    // Data source: free Solana blockchain feed (default), paid PumpPortal stream, or synthetic mock data.
+    if (process.env.MOCK === '1') this.feed = new (require('./mockfeed'))(null, this.logger);
+    else if (baseCfg.source === 'pumpportal') this.feed = new (require('./feed'))(baseCfg.pumpportal.wsUrl, this.logger);
+    else this.feed = new (require('./solanafeed'))(baseCfg.solana, this.logger);
     this.usage = new Usage(path.join(this.dataDir, 'usage.json'), baseCfg.dataCost);
     this.recorder = new Recorder(this.dataDir);
     this.cash = baseCfg.startCapital;
@@ -50,6 +52,8 @@ class Bot {
     if (this.tuned) this.logger.log('system', `Optimierte Parameter geladen: ${JSON.stringify(this.tuned.params)}`);
     this.feed.on('create', (m) => this.scout(m));
     this.feed.on('trade', (m) => this.onTrade(m));
+    this.feed.on('invalid', (m) => this.onInvalid(m));
+    this.feed.on('complete', (m) => this.onComplete(m));
     this.feed.connect();
     setInterval(() => this.riskTick(), this.cfg.risk.checkIntervalMs);
     setInterval(() => this.recordEquity(), 5000);
@@ -74,7 +78,7 @@ class Bot {
     if (!m.mint || this.tokens.has(m.mint)) return;
     const watching = this.watchingCount();
     if (watching >= this.cfg.scout.maxWatching) { this.touch('scout', `übersprungen ${m.symbol} (Kapazität)`); return; }
-    if (this.usage.overBudget()) {
+    if (this.feed.billed && this.usage.overBudget()) {
       if (!this.budgetLogged || Date.now() - this.budgetLogged > 600000) {
         this.budgetLogged = Date.now();
         this.logger.log('scout', `Datenbudget ${this.baseCfg.dataCost.maxSolPerDay} SOL/24h erreicht – Scan pausiert (config.json → dataCost)`, 'warn');
@@ -92,6 +96,7 @@ class Bot {
     };
     if (!(t.vSol > 0 && t.vTokens > 0)) return;
     t.startPrice = t.vSol / t.vTokens;
+    t.curveTokens0 = t.vTokens + t.initialBuy; // curve tokens before the dev buy
     if (t.initialBuy > 0) t.balances.set(t.dev, t.initialBuy);
     this.tokens.set(m.mint, t);
     this.feed.watch(m.mint);
@@ -102,7 +107,7 @@ class Bot {
   }
 
   onTrade(m) {
-    if (process.env.MOCK !== '1') this.usage.add(1); // mock data is not billed
+    if (this.feed.billed) this.usage.add(1); // only PumpPortal charges per message
     if (this.feed.tradesBlocked) { this.feed.tradesBlocked = false; this.logger.log('feed', 'Trade-Daten kommen wieder an'); }
     const t = this.tokens.get(m.mint);
     if (!t) return;
@@ -120,6 +125,30 @@ class Bot {
       this.reject(t, 'filter', 'Dev hat verkauft');
     }
     if (this.positions.has(t.mint)) this.checkPosition(t);
+  }
+
+  // Token is not traded against SOL (pump.fun also supports other quote currencies) – cannot be simulated.
+  onInvalid(m) {
+    const t = this.tokens.get(m.mint);
+    if (!t) return;
+    const pos = this.positions.get(m.mint);
+    if (pos && !pos.selling) {
+      const reason = `${m.reason} – Verkauf zum letzten gültigen Kurs`;
+      this.logger.decision('risk', 'EXIT', { mint: t.mint, symbol: t.symbol, price: (t.vSol / t.vTokens).toExponential(4), pnlPct: fmt(pos.netPct, 2), reason });
+      this.executeSell(t, pos, reason);
+    } else if (t.stage === 'watching') { clearTimeout(t.timer); this.reject(t, 'filter', m.reason); }
+  }
+
+  // Bonding curve completed (token migrates to an AMM): no curve price anymore – close at the last curve price.
+  onComplete(m) {
+    const t = this.tokens.get(m.mint);
+    if (!t) return;
+    const pos = this.positions.get(m.mint);
+    if (pos && !pos.selling) {
+      const reason = 'Bonding-Curve abgeschlossen (Migration) – Verkauf zum letzten Kurven-Preis';
+      this.logger.decision('risk', 'EXIT', { mint: t.mint, symbol: t.symbol, price: (t.vSol / t.vTokens).toExponential(4), pnlPct: fmt(pos.netPct, 2), reason });
+      this.executeSell(t, pos, reason);
+    } else if (t.stage === 'watching') { clearTimeout(t.timer); this.reject(t, 'filter', 'Bonding-Curve bereits abgeschlossen'); }
   }
 
   reject(t, module, reason, extra = {}) {
@@ -237,7 +266,7 @@ class Bot {
     this.agents.risk.state = this.positions.size ? `überwacht ${this.positions.size}` : 'idle';
     for (const pos of this.positions.values()) { const t = this.tokens.get(pos.mint); if (t) this.checkPosition(t); }
     const w = this.watchingCount();
-    this.agents.scout.state = !this.feed.connected ? 'offline' : this.usage.overBudget() ? 'Budget erreicht' : `beobachtet ${w}`;
+    this.agents.scout.state = !this.feed.connected ? 'offline' : this.feed.billed && this.usage.overBudget() ? 'Budget erreicht' : `beobachtet ${w}`;
     this.agents.filter.state = w ? `prüft ${w}` : 'idle';
   }
 
@@ -317,7 +346,8 @@ class Bot {
       closed: this.closed.slice(-30).reverse(),
       stats: { trades: this.closed.length, wins, winRate: this.closed.length ? wins / this.closed.length : 0,
         tradesLastHour: this.closed.filter((c) => c.closedAt > hourAgo).length, watching: this.watchingCount() },
-      usage: this.usage.state(),
+      usage: { ...this.usage.state(), billed: !!this.feed.billed },
+      feed: this.feed.info ? this.feed.info() : { source: process.env.MOCK === '1' ? 'mock' : 'pumpportal' },
       research: { active: this.recorder.active.size, recorded: this.recorder.written },
       strategy: {
         tunedKeys, tunedAt: this.tuned ? this.tuned.at : null,

@@ -8,10 +8,10 @@ const root = path.join(__dirname, '..');
 
 (async () => {
   loadEnv(root);
-  await ensureApiKey(root);
-  const Bot = require('./bot');
   const cfgPath = process.env.CONFIG ? path.resolve(process.env.CONFIG) : path.join(root, 'config.json');
   const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+  await ensureApiKey(root, cfg);
+  const Bot = require('./bot');
   const bot = new Bot(cfg, root, cfgPath);
 
   process.on('uncaughtException', (e) => bot.logger.log('system', `uncaughtException: ${e.stack || e}`, 'error'));
