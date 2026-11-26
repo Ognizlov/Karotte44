@@ -111,11 +111,74 @@ function simulateExit(path, endDt, r, delayMs) {
   return { code, trig, S: path[j][1], T: path[j][2] };
 }
 
+// ---- Token state: one code path for the live bot and for replaying recorded tokens ----
+function newToken(m, now) {
+  const t = {
+    mint: m.mint, symbol: m.symbol || '?', name: m.name || '', dev: m.traderPublicKey,
+    createdAt: now, initialBuy: Number(m.initialBuy) || 0,
+    vSol: Number(m.vSolInBondingCurve), vTokens: Number(m.vTokensInBondingCurve),
+    balances: new Map(), buyers: new Set(), buys: 0, sells: 0, volumeSol: 0,
+    devSold: false, stage: 'watching', lastTrade: now,
+  };
+  t.startPrice = t.vSol / t.vTokens;
+  t.curveTokens0 = t.vTokens + t.initialBuy; // curve tokens before the dev buy
+  if (t.initialBuy > 0) t.balances.set(t.dev, t.initialBuy);
+  return t;
+}
+// Applies one trade message; returns true if it carried a valid curve state.
+function applyTrade(t, m, now) {
+  const vS = Number(m.vSolInBondingCurve), vT = Number(m.vTokensInBondingCurve);
+  const curveOk = vS > 0 && vT > 0; // migrated / malformed updates carry no bonding-curve state
+  if (curveOk) { t.vSol = vS; t.vTokens = vT; }
+  t.lastTrade = now;
+  t.volumeSol += Number(m.solAmount) || 0;
+  if (m.newTokenBalance !== undefined) t.balances.set(m.traderPublicKey, Number(m.newTokenBalance));
+  if (m.txType === 'buy') { t.buys++; t.buyers.add(m.traderPublicKey); }
+  else { t.sells++; if (m.traderPublicKey === t.dev) t.devSold = true; }
+  return curveOk;
+}
+
+// ---- Replay of a recorded token (data/tokens-*.jsonl, see recorder.js) ----
+// Trades: [dtMs, userIdx, isBuy, sol, tokens, newBalance, vSol, vTokens]; events: [dtMs, 'invalid'|'complete'].
+const tradeMsg = (rec, tr) => ({ txType: tr[2] ? 'buy' : 'sell', traderPublicKey: rec.users[tr[1]], solAmount: tr[3], tokenAmount: tr[4],
+  newTokenBalance: tr[5] == null ? undefined : tr[5], vSolInBondingCurve: tr[6], vTokensInBondingCurve: tr[7] });
+function firstEvent(rec) { return (rec.events || []).reduce((m, e) => Math.min(m, e[0]), Infinity); }
+function replayAt(rec, atMs) {
+  if (firstEvent(rec) <= atMs) return null; // invalid token or curve completed: the live bot drops it
+  const c = rec.create;
+  const t = newToken({ mint: rec.mint, symbol: rec.symbol, traderPublicKey: c.dev, initialBuy: c.initialBuy,
+    vSolInBondingCurve: c.vSol, vTokensInBondingCurve: c.vTokens }, 0);
+  for (const tr of rec.trades) { if (tr[0] > atMs) break; applyTrade(t, tradeMsg(rec, tr), tr[0]); }
+  return t;
+}
+// What Filter + Analyst would see if the observation ended W seconds after creation (null = filtered out).
+function entryAt(rec, W, cfg) {
+  const t = replayAt(rec, W * 1000);
+  if (!t) return null;
+  const f = features(t, cfg.totalSupply);
+  if (filterCheck(f, cfg.filter)) return null;
+  return { f, score: score(f, cfg.analyst) };
+}
+// Curve path after a fill at fillMs (path[0] = state at the fill) and how long it is known.
+function pathAfter(rec, fillMs) {
+  let S0 = rec.create.vSol, T0 = rec.create.vTokens;
+  const path = [];
+  for (const tr of rec.trades) {
+    if (!(tr[6] > 0 && tr[7] > 0)) continue;
+    if (tr[0] <= fillMs) { S0 = tr[6]; T0 = tr[7]; } else path.push([tr[0] - fillMs, tr[6], tr[7]]);
+  }
+  const ev = firstEvent(rec);
+  if (ev <= fillMs) return null;
+  const end = Math.min(rec.endDt, ev);
+  return { path: [[0, S0, T0], ...path.filter((p) => p[0] <= end - fillMs)], endDt: end - fillMs, forced: ev < Infinity && ev <= rec.endDt };
+}
+
 // config.json + optimizer overrides (data/tuned.json) -> live parameters
 function mergeConfig(base, tuned) {
   const c = JSON.parse(JSON.stringify(base));
-  if (tuned) for (const sec of ['analyst', 'risk']) Object.assign(c[sec], (tuned.params || {})[sec] || {});
+  if (tuned) for (const sec of ['filter', 'analyst', 'risk']) Object.assign(c[sec], (tuned.params || {})[sec] || {});
   return c;
 }
 
-module.exports = { features, filterCheck, score, entryCheck, quoteBuy, quoteSell, priceExit, timeExit, describeExit, simulateExit, mergeConfig };
+module.exports = { features, filterCheck, score, entryCheck, quoteBuy, quoteSell, priceExit, timeExit, describeExit, simulateExit,
+  newToken, applyTrade, replayAt, entryAt, pathAfter, mergeConfig };

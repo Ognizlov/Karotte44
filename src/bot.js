@@ -87,19 +87,11 @@ class Bot {
       return;
     }
     const supply = this.cfg.totalSupply;
-    const t = {
-      mint: m.mint, symbol: m.symbol || '?', name: m.name || '', dev: m.traderPublicKey,
-      createdAt: Date.now(), initialBuy: Number(m.initialBuy) || 0,
-      vSol: Number(m.vSolInBondingCurve), vTokens: Number(m.vTokensInBondingCurve),
-      balances: new Map(), buyers: new Set(), buys: 0, sells: 0, volumeSol: 0,
-      devSold: false, stage: 'watching', lastTrade: Date.now(),
-    };
-    if (!(t.vSol > 0 && t.vTokens > 0)) return;
-    t.startPrice = t.vSol / t.vTokens;
-    t.curveTokens0 = t.vTokens + t.initialBuy; // curve tokens before the dev buy
-    if (t.initialBuy > 0) t.balances.set(t.dev, t.initialBuy);
+    if (!(Number(m.vSolInBondingCurve) > 0 && Number(m.vTokensInBondingCurve) > 0)) return;
+    const t = S.newToken(m, Date.now());
     this.tokens.set(m.mint, t);
     this.feed.watch(m.mint);
+    this.startRecording(t);
     const devPct = fmt((t.initialBuy / supply) * 100, 2);
     this.touch('scout', `neu: ${t.symbol} (Dev-Buy ${devPct}%)`);
     this.logger.log('scout', `Neuer Token ${t.symbol} ${m.mint.slice(0, 8)} – Dev-Initialbuy ${devPct}%`);
@@ -111,15 +103,9 @@ class Bot {
     if (this.feed.tradesBlocked) { this.feed.tradesBlocked = false; this.logger.log('feed', 'Trade-Daten kommen wieder an'); }
     const t = this.tokens.get(m.mint);
     if (!t) return;
-    const vS = Number(m.vSolInBondingCurve), vT = Number(m.vTokensInBondingCurve);
-    const curveOk = vS > 0 && vT > 0; // migrated / malformed updates carry no bonding-curve state
-    if (curveOk) { t.vSol = vS; t.vTokens = vT; }
-    t.lastTrade = Date.now();
-    t.volumeSol += Number(m.solAmount) || 0;
-    if (m.newTokenBalance !== undefined) t.balances.set(m.traderPublicKey, Number(m.newTokenBalance));
-    if (m.txType === 'buy') { t.buys++; t.buyers.add(m.traderPublicKey); }
-    else { t.sells++; if (m.traderPublicKey === t.dev) t.devSold = true; }
-    if (curveOk) this.recorder.point(t.mint, t.lastTrade, t.vSol, t.vTokens);
+    const now = Date.now();
+    S.applyTrade(t, m, now);
+    this.recorder.trade(t.mint, now, m);
     if (t.stage === 'watching' && t.devSold && this.cfg.filter.rejectIfDevSells) {
       clearTimeout(t.timer);
       this.reject(t, 'filter', 'Dev hat verkauft');
@@ -131,6 +117,7 @@ class Bot {
   onInvalid(m) {
     const t = this.tokens.get(m.mint);
     if (!t) return;
+    this.recorder.event(m.mint, Date.now(), 'invalid');
     const pos = this.positions.get(m.mint);
     if (pos && !pos.selling) {
       const reason = `${m.reason} – Verkauf zum letzten gültigen Kurs`;
@@ -143,6 +130,7 @@ class Bot {
   onComplete(m) {
     const t = this.tokens.get(m.mint);
     if (!t) return;
+    this.recorder.event(m.mint, Date.now(), 'complete');
     const pos = this.positions.get(m.mint);
     if (pos && !pos.selling) {
       const reason = 'Bonding-Curve abgeschlossen (Migration) – Verkauf zum letzten Kurven-Preis';
@@ -174,9 +162,6 @@ class Bot {
     const sc = S.score(f, this.cfg.analyst);
     t.score = sc;
     const detail = `Buyers ${f.buyers}, B/S ${fmt(f.ratio, 2)}, Vol ${fmt(f.volumeSol, 2)} SOL, Δ ${fmt(f.priceChgPct, 1)}%`;
-    // Research: tokens above the (low) exploration score are recorded as hypothetical trades for the optimizer.
-    const rs = this.baseCfg.research.minScore ?? this.baseCfg.analyst.minScore;
-    if (this.baseCfg.research.enabled && sc >= rs && this.usage.ratio() < 0.8) this.startCandidate(t, f, sc);
     const why = S.entryCheck(f, sc, this.cfg.analyst);
     if (why) return this.reject(t, 'analyst', `${why} (${detail})`, { score: fmt(sc, 3) });
     this.touch('analyst', `✓ ${t.symbol} Score ${fmt(sc, 2)}`);
@@ -184,12 +169,26 @@ class Bot {
     this.executeBuy(t);
   }
 
-  startCandidate(t, f, sc) {
-    const ex = this.cfg.executor, horizon = this.baseCfg.research.horizonSeconds * 1000;
-    this.recorder.start(t.mint, { symbol: t.symbol, decidedAt: Date.now(), features: f, score: sc, refSol: this.equityNow() * ex.positionSizePct / 100 });
-    setTimeout(() => this.recorder.fill(t.mint, Date.now(), t.vSol, t.vTokens), ex.delayMs);
-    // record a little past the horizon so exits at the horizon still see the curve after the latency
-    setTimeout(() => { this.recorder.finish(t.mint, Date.now()); this.release(t); }, ex.delayMs + horizon + ex.delayMs + 1000);
+  // Research: record every token's full trade history from creation, so the optimizer can replay it with
+  // other observation windows (entry after 5/10/15/20/30 s), entry thresholds and exit rules.
+  observeWindows() {
+    return [...new Set([...(this.baseCfg.research.observeWindows || [5, 10, 15, 20, 30]), this.cfg.filter.observeSeconds])].sort((a, b) => a - b);
+  }
+  startRecording(t) {
+    const r = this.baseCfg.research;
+    if (!r.enabled || (this.feed.billed && this.usage.ratio() >= 0.8)) return;
+    const ex = this.cfg.executor, maxW = Math.max(...this.observeWindows()) * 1000;
+    this.recorder.start(t, this.equityNow() * ex.positionSizePct / 100);
+    // After the longest observation window: keep only tokens that would be a candidate in some window.
+    setTimeout(() => {
+      const rec = this.recorder.get(t.mint);
+      if (!rec) return;
+      const minScore = r.minScore ?? this.baseCfg.analyst.minScore;
+      const keep = this.observeWindows().some((W) => { const e = S.entryAt(rec, W, this.baseCfg); return e && e.score >= minScore; });
+      if (!keep) { this.recorder.drop(t.mint); this.release(t); return; }
+      // ...and follow it long enough to simulate exits after the latest possible entry
+      setTimeout(() => { this.recorder.finish(t.mint, Date.now()); this.release(t); }, 2 * ex.delayMs + r.horizonSeconds * 1000 + 1000);
+    }, maxW + 50);
   }
 
   // ---------- 4. Executor ----------
@@ -306,7 +305,7 @@ class Bot {
       fs.writeFileSync(this.tunedPath, JSON.stringify({ at: rep.at, params: b.params, test: b.test, all: b.all }, null, 2));
       this.tuned = JSON.parse(fs.readFileSync(this.tunedPath, 'utf8'));
       const merged = S.mergeConfig(this.baseCfg, this.tuned);
-      Object.assign(this.cfg.analyst, merged.analyst); Object.assign(this.cfg.risk, merged.risk);
+      Object.assign(this.cfg.filter, merged.filter); Object.assign(this.cfg.analyst, merged.analyst); Object.assign(this.cfg.risk, merged.risk);
       this.agents.optimizer.state = 'angewendet';
       this.touch('optimizer', `✓ neue Parameter (${sum(b.all)})`);
       this.logger.decision('optimizer', 'APPLY', { reason: `${rep.reason}. ${msg}. Neu: ${JSON.stringify(b.params)}` });
@@ -335,7 +334,7 @@ class Bot {
     const wins = this.closed.filter((c) => c.pnl > 0).length;
     const hourAgo = Date.now() - 3600000;
     const tunedKeys = [];  // parameters where the optimizer deviates from config.json
-    for (const sec of ['analyst', 'risk']) for (const k of Object.keys(this.cfg[sec])) if (this.cfg[sec][k] !== this.baseCfg[sec][k]) tunedKeys.push(k);
+    for (const sec of ['filter', 'analyst', 'risk']) for (const k of Object.keys(this.cfg[sec])) if (typeof this.cfg[sec][k] !== 'object' && this.cfg[sec][k] !== this.baseCfg[sec][k]) tunedKeys.push(k);
     const a = this.cfg.analyst, r = this.cfg.risk;
     return {
       connected: this.feed.connected, tradesBlocked: this.feed.tradesBlocked, mock: process.env.MOCK === '1',
@@ -352,7 +351,7 @@ class Bot {
       research: { active: this.recorder.active.size, recorded: this.recorder.written },
       strategy: {
         tunedKeys, tunedAt: this.tuned ? this.tuned.at : null,
-        params: { minScore: a.minScore, minUniqueBuyers: a.minUniqueBuyers, maxPriceChangePct: a.maxPriceChangePct, maxTop10Pct: a.maxTop10Pct || 0,
+        params: { observeSeconds: this.cfg.filter.observeSeconds, minScore: a.minScore, minUniqueBuyers: a.minUniqueBuyers, maxPriceChangePct: a.maxPriceChangePct, maxTop10Pct: a.maxTop10Pct || 0,
           stopLossPct: r.stopLossPct, takeProfitPct: r.takeProfitPct, trailingActivationPct: r.trailingActivationPct,
           trailingDistancePct: r.trailingDistancePct, maxHoldMinutes: r.maxHoldMinutes, stallExitSeconds: r.stallExitSeconds },
       },

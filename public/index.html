@@ -58,11 +58,11 @@ function draw(pts,start){const c=$('chart'),r=devicePixelRatio||1,w=c.clientWidt
  g.beginPath();pts.forEach((p,i)=>i?g.lineTo(X(p.t),Y(p.v)):g.moveTo(X(p.t),Y(p.v)));g.strokeStyle=col;g.lineWidth=2;g.stroke();
  g.lineTo(X(t1),h-B);g.lineTo(X(t0),h-B);g.closePath();g.fillStyle=gr;g.fill();
  g.fillStyle='#7d869a';g.fillText(new Date(t0).toLocaleTimeString(),L,h-4);const e=new Date(t1).toLocaleTimeString();g.fillText(e,w-g.measureText(e).width-4,h-4)}
-const LBL={minScore:['Min. Score',''],minUniqueBuyers:['Min. Käufer',''],maxPriceChangePct:['Max. Δ bei Einstieg','%'],maxTop10Pct:['Max. Top-10-Holder (streng)','%'],stopLossPct:['Stop-Loss','%'],takeProfitPct:['Take-Profit','%'],trailingActivationPct:['Trailing ab','%'],trailingDistancePct:['Trailing-Abstand','%'],maxHoldMinutes:['Max. Haltezeit',' min'],stallExitSeconds:['Exit ohne Trades nach',' s']};
+const LBL={observeSeconds:['Einstieg nach',' s'],minScore:['Min. Score',''],minUniqueBuyers:['Min. Käufer',''],maxPriceChangePct:['Max. Δ bei Einstieg','%'],maxTop10Pct:['Max. Top-10-Holder (streng)','%'],stopLossPct:['Stop-Loss','%'],takeProfitPct:['Take-Profit','%'],trailingActivationPct:['Trailing ab','%'],trailingDistancePct:['Trailing-Abstand','%'],maxHoldMinutes:['Max. Haltezeit',' min'],stallExitSeconds:['Exit ohne Trades nach',' s']};
 function renderStrategy(st){$('strat').innerHTML=Object.entries(st.params).map(([k,v])=>`<tr><td>${LBL[k][0]}</td><td>${v===0&&k!=='stopLossPct'?'aus':v+LBL[k][1]}${st.tunedKeys.includes(k)?'<span class="tuned">optimiert</span>':''}</td></tr>`).join('');
  $('stratsub').textContent=st.tunedAt?'Optimiert am '+new Date(st.tunedAt).toLocaleString():'Startwerte aus config.json (noch nicht optimiert)'}
 const row=(n,x)=>x?`<tr><td>${n}</td><td>${x.n}</td><td class="${cls(x.avgPct)}">${f(x.avgPct,2)}%</td><td>${f(x.winRate*100,0)}%</td><td class="${cls(x.solAt8pct)}">${x.solAt8pct>=0?'+':''}${f(x.solAt8pct,3)}</td></tr>`:'';
-function renderOpt(o,r){$('optbtn').disabled=o.running;const rep=o.report;let h=`Aufgezeichnete Kandidaten: <b>${r.recorded}</b> (+${r.active} laufend) · Ziel: ${o.minTrades}<br>`;
+function renderOpt(o,r){$('optbtn').disabled=o.running;const rep=o.report;let h=`Aufgezeichnete Tokens: <b>${r.recorded}</b> (+${r.active} laufend) · ab ${o.minTrades} Kandidaten wird optimiert<br>`;
  if(o.running)h+='Rechnet…';else if(!rep)h+='Noch kein Lauf – erster automatischer Lauf 10 min nach Start, dann alle 30 min.';
  else if(rep.status!=='ok')h+=`Letzter Lauf ${new Date(rep.at).toLocaleTimeString()}: ${esc(rep.reason)}`;
  else{h+=`Letzter Lauf ${new Date(rep.at).toLocaleTimeString()} · ${f(rep.hours,1)} h Daten · <b class="${rep.recommended?'up':'warn'}">${rep.recommended?'übernommen':'nicht übernommen'}</b>: ${esc(rep.reason)}

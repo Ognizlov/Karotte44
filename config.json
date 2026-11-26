@@ -58,6 +58,13 @@
   },
   "research": {
     "enabled": true,
+    "observeWindows": [
+      5,
+      10,
+      15,
+      20,
+      30
+    ],
     "horizonSeconds": 180,
     "minScore": 0.2
   },

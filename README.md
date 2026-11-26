@@ -38,14 +38,13 @@ Alternative (kostenpflichtig): `"source": "pumpportal"` in `config.json` – Pum
 6. **Logger** – jede Entscheidung mit Grund in `trades.csv` und `log.txt`
 
 ## Optimizer (`src/optimizer.js`)
-- Jeder Token mit Score ≥ `research.minScore` (Standard 0,2) wird als „Kandidat“ aufgezeichnet –
-  auch wenn der Bot ihn nicht kauft – mit dem Kursverlauf bis `research.horizonSeconds` nach dem Einstieg (`data/`).
-- Getestet werden u. a. Mindest-Score, Mindest-Käufer, max. Preisanstieg vor dem Einstieg, max. Top-10-Holder-Anteil
-  (`maxTop10Pct`) sowie Stop-Loss, Take-Profit, Trailing-Stop, Haltezeit und Exit ohne Trades.
-- Alle 30 min (ab 40 Kandidaten) spielt der Optimizer alle Kandidaten mit tausenden Kombinationen aus
-  Einstiegs-Schwellen und Exit-Regeln durch – mit derselben Logik wie der Live-Bot, inkl. Gebühren und Verzögerung.
-- Ausgewählt wird auf den älteren 70 % der Daten; übernommen wird nur, wenn die Einstellung auch in den
+- Der Bot zeichnet von jedem neuen Token den **kompletten Trade-Verlauf ab der Erstellung** auf (`data/tokens-*.jsonl`) –
+  egal ob er ihn kauft. Behalten werden Tokens, die in irgendeinem Einstiegsfenster Score ≥ `research.minScore` hätten.
+- Der Optimizer spielt jeden Token mit derselben Logik wie live nach – so, als wäre der Bot nach
+  5, 10, 15, 20 oder 30 Sekunden (`research.observeWindows`) eingestiegen – und testet dazu tausende Kombinationen aus
+  Einstiegs-Schwellen (Score, Käufer, Preisanstieg, Top-10-Holder) und Exit-Regeln, inkl. Gebühren und 1,5 s Verzögerung.
+- Ausgewählt wird auf den älteren 70 % der Tokens; übernommen wird nur, wenn die Einstellung auch auf den
   neueren 30 % **deutlich** im Plus ist (t ≥ 1) und besser als die aktuelle ist. Sonst bleibt alles, wie es ist.
-- Übernommene Werte stehen in `data/tuned.json` und überschreiben `config.json`. Zurücksetzen: Datei löschen.
-- Einstiegs-Schwellen unter `research.minScore` kann er nicht testen, weil dafür keine Daten existieren.
-- `npm.cmd run report` fasst die bisherigen Trades zusammen (nach Verkaufsgrund und Score).
+- Übernommene Werte (auch die Beobachtungszeit) stehen in `data/tuned.json` und überschreiben `config.json`. Zurücksetzen: Datei löschen.
+- `npm.cmd run optimize` zeigt den Bericht inkl. bestem Ergebnis je Einstiegszeitpunkt, `npm.cmd run report` fasst die bisherigen Trades zusammen.
+- Kein Backtest garantiert zukünftige Gewinne.
