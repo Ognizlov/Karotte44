@@ -8,7 +8,8 @@
     "mock": "node src/index.js --mock",
     "optimize": "node src/optimizer.js",
     "optimize:apply": "node src/optimizer.js --apply",
-    "check": "node src/check.js"
+    "check": "node src/check.js",
+    "report": "node src/report.js"
   },
   "repository": {
     "type": "git",
