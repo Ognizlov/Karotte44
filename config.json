@@ -26,6 +26,7 @@
     "minScore": 0.45,
     "minUniqueBuyers": 0,
     "maxPriceChangePct": 0,
+    "maxTop10Pct": 0,
     "weights": {
       "uniqueBuyers": 0.3,
       "buySellRatio": 0.25,
@@ -57,7 +58,8 @@
   },
   "research": {
     "enabled": true,
-    "horizonSeconds": 180
+    "horizonSeconds": 180,
+    "minScore": 0.2
   },
   "optimizer": {
     "auto": true,

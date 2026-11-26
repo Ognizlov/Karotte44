@@ -32,16 +32,18 @@ function activeHours(recs) {
 
 function grid(base) {
   const scores = [];
-  for (let s = base.analyst.minScore; s <= 0.951; s += 0.05) scores.push(+s.toFixed(2));
+  const lo = base.research.minScore ?? base.analyst.minScore;
+  for (let s = lo; s <= 0.951; s += 0.05) scores.push(+s.toFixed(2));
   const entries = [];
-  for (const minScore of scores) for (const minUniqueBuyers of [0, 5, 8, 12, 16, 20])
-    for (const maxPriceChangePct of [0, 300, 150, 80, 40]) entries.push({ minScore, minUniqueBuyers, maxPriceChangePct });
+  for (const minScore of scores) for (const minUniqueBuyers of [0, 8, 15])
+    for (const maxPriceChangePct of [0, 150, 60]) for (const maxTop10Pct of [0, 20, 12])
+      entries.push({ minScore, minUniqueBuyers, maxPriceChangePct, maxTop10Pct });
   const maxHold = Math.floor(base.research.horizonSeconds / 60);
   const exits = [];
-  for (const stopLossPct of [-4, -6, -8, -12, -20]) for (const takeProfitPct of [0, 6, 10, 15, 25, 40])
-    for (const trailingActivationPct of [5, 8, 12, 20]) for (const trailingDistancePct of [3, 5, 8, 12])
+  for (const stopLossPct of [-4, -7, -12, -20]) for (const takeProfitPct of [0, 8, 15, 30])
+    for (const trailingActivationPct of [5, 10, 20]) for (const trailingDistancePct of [3, 6, 10])
       for (const maxHoldMinutes of [0.5, 1, 2, 3, 5].filter((h) => h <= maxHold))
-        for (const stallExitSeconds of [0, 15, 30, 60])
+        for (const stallExitSeconds of [0, 20, 45])
           exits.push({ stopLossPct, takeProfitPct, trailingActivationPct, trailingDistancePct, maxHoldMinutes, stallExitSeconds });
   return { entries, exits };
 }

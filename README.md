@@ -38,11 +38,14 @@ Alternative (kostenpflichtig): `"source": "pumpportal"` in `config.json` – Pum
 6. **Logger** – jede Entscheidung mit Grund in `trades.csv` und `log.txt`
 
 ## Optimizer (`src/optimizer.js`)
-- Jeder Token, der die Schwellen aus `config.json` erfüllt, wird als „Kandidat“ aufgezeichnet –
+- Jeder Token mit Score ≥ `research.minScore` (Standard 0,2) wird als „Kandidat“ aufgezeichnet –
   auch wenn der Bot ihn nicht kauft – mit dem Kursverlauf bis `research.horizonSeconds` nach dem Einstieg (`data/`).
+- Getestet werden u. a. Mindest-Score, Mindest-Käufer, max. Preisanstieg vor dem Einstieg, max. Top-10-Holder-Anteil
+  (`maxTop10Pct`) sowie Stop-Loss, Take-Profit, Trailing-Stop, Haltezeit und Exit ohne Trades.
 - Alle 30 min (ab 40 Kandidaten) spielt der Optimizer alle Kandidaten mit tausenden Kombinationen aus
   Einstiegs-Schwellen und Exit-Regeln durch – mit derselben Logik wie der Live-Bot, inkl. Gebühren und Verzögerung.
 - Ausgewählt wird auf den älteren 70 % der Daten; übernommen wird nur, wenn die Einstellung auch in den
   neueren 30 % **deutlich** im Plus ist (t ≥ 1) und besser als die aktuelle ist. Sonst bleibt alles, wie es ist.
 - Übernommene Werte stehen in `data/tuned.json` und überschreiben `config.json`. Zurücksetzen: Datei löschen.
-- Der Optimizer kann Einstiegs-Schwellen nur **verschärfen** (gegenüber `config.json`), weil für lockerere keine Daten existieren.
+- Einstiegs-Schwellen unter `research.minScore` kann er nicht testen, weil dafür keine Daten existieren.
+- `npm.cmd run report` fasst die bisherigen Trades zusammen (nach Verkaufsgrund und Score).

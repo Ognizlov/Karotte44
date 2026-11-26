@@ -42,6 +42,7 @@ function entryCheck(f, s, a) {
   if (s < a.minScore) return `Score ${s.toFixed(2)} < ${a.minScore}`;
   if (a.minUniqueBuyers > 0 && f.buyers < a.minUniqueBuyers) return `Buyers ${f.buyers} < ${a.minUniqueBuyers}`;
   if (a.maxPriceChangePct > 0 && f.priceChgPct > a.maxPriceChangePct) return `Preis schon +${f.priceChgPct.toFixed(0)}% > ${a.maxPriceChangePct}% (zu spät)`;
+  if (a.maxTop10Pct > 0 && f.top10Pct > a.maxTop10Pct) return `Top-10-Holder ${f.top10Pct.toFixed(1)}% > ${a.maxTop10Pct}% (Dump-Risiko)`;
   return null;
 }
 

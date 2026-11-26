@@ -174,8 +174,9 @@ class Bot {
     const sc = S.score(f, this.cfg.analyst);
     t.score = sc;
     const detail = `Buyers ${f.buyers}, B/S ${fmt(f.ratio, 2)}, Vol ${fmt(f.volumeSol, 2)} SOL, Δ ${fmt(f.priceChgPct, 1)}%`;
-    // Research: tokens passing the base thresholds of config.json are recorded as hypothetical trades.
-    if (this.baseCfg.research.enabled && !S.entryCheck(f, sc, this.baseCfg.analyst) && this.usage.ratio() < 0.8) this.startCandidate(t, f, sc);
+    // Research: tokens above the (low) exploration score are recorded as hypothetical trades for the optimizer.
+    const rs = this.baseCfg.research.minScore ?? this.baseCfg.analyst.minScore;
+    if (this.baseCfg.research.enabled && sc >= rs && this.usage.ratio() < 0.8) this.startCandidate(t, f, sc);
     const why = S.entryCheck(f, sc, this.cfg.analyst);
     if (why) return this.reject(t, 'analyst', `${why} (${detail})`, { score: fmt(sc, 3) });
     this.touch('analyst', `✓ ${t.symbol} Score ${fmt(sc, 2)}`);
@@ -351,7 +352,7 @@ class Bot {
       research: { active: this.recorder.active.size, recorded: this.recorder.written },
       strategy: {
         tunedKeys, tunedAt: this.tuned ? this.tuned.at : null,
-        params: { minScore: a.minScore, minUniqueBuyers: a.minUniqueBuyers, maxPriceChangePct: a.maxPriceChangePct,
+        params: { minScore: a.minScore, minUniqueBuyers: a.minUniqueBuyers, maxPriceChangePct: a.maxPriceChangePct, maxTop10Pct: a.maxTop10Pct || 0,
           stopLossPct: r.stopLossPct, takeProfitPct: r.takeProfitPct, trailingActivationPct: r.trailingActivationPct,
           trailingDistancePct: r.trailingDistancePct, maxHoldMinutes: r.maxHoldMinutes, stallExitSeconds: r.stallExitSeconds },
       },
