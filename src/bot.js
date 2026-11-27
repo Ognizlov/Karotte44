@@ -55,7 +55,7 @@ class Bot {
   }
 
   start() {
-    this.logger.log('system', `Start – Paper-Trading, Kapital ${this.cfg.startCapital} SOL (SIMULATION, kein Wallet)`);
+    this.logger.log('system', `Start – Version 3 (${this.mode === 'graduation' ? 'ältere Tokens + Whale-Filter' : 'neue Tokens'}), Paper-Trading, Kapital ${this.cfg.startCapital} SOL (SIMULATION, kein Wallet)`);
     if (this.tuned) this.logger.log('system', `Optimierte Parameter geladen: ${JSON.stringify(this.tuned.params)}`);
     this.feed.on('create', (m) => this.scout(m));
     this.feed.on('trade', (m) => this.onTrade(m));
