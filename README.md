@@ -33,6 +33,9 @@ Alternative (kostenpflichtig): `"source": "pumpportal"` in `config.json` – Pum
   Kauf, wenn die Kurve zwischen `minRealSol` und `maxRealSol` liegt **und** in den letzten `lookbackSeconds` starker Kaufdruck
   herrscht (Netto-Zufluss ≥ `minNetSol`, ≥ `minBuyers` Käufer, optional ≥ `minSells` Verkäufe gegen abgesprochene Pumps).
   Ausstieg: Stop-Loss, Take-Profit, Trailing-Stop, Haltezeit, keine Trades mehr, und Verkauf vor der Migration ab `exitRealSol`.
+  **Whale-Filter:** Für Tokens, die der Bot ab ihrer Erstellung gesehen hat, zählt er die Bestände jeder Wallet mit.
+  `maxTopHolderPct` (größte Wallet in % der Supply) und `maxUnknownPct` (Bestände aus nicht gesehenen Trades) – 0 = aus.
+  Ist ein Filter aktiv, werden Tokens mit unbekannter Vorgeschichte übersprungen.
   Regeln in `src/gradstrategy.js`, Parameter unter `graduation` in `config.json`.
 - **`newTokens`: brandneue Tokens** in den ersten Sekunden (Pipeline unten).
 
@@ -43,7 +46,8 @@ Der Optimizer arbeitet für die aktive Strategie: Er spielt die aufgezeichneten 
 2. **Filter** – 30 s beobachten; verwerfen bei Dev-Initialbuy > 8 %, Dev-Verkauf, Top-10-Holder > 30 %
 3. **Analyst** – Score 0–1 (Käufer, Buy/Sell, Volumen, Preisänderung); Kauf ab `minScore`.
    Optional: `minUniqueBuyers`, `maxPriceChangePct` (nicht zu spät einsteigen), 0 = aus
-4. **Executor** – 8 % der Equity, Bonding-Curve (vSol/vTokens), 1 % Fee, Priority-Fee, 1,5 s Verzögerung
+4. **Executor** – fester Einsatz (`sizing: "fixed"`, 8 % des Startkapitals, höchstens `maxPositionPctOfEquity` % des aktuellen
+   Guthabens) oder `"percent"` (8 % des aktuellen Guthabens); Bonding-Curve (vSol/vTokens), 1 % Fee, Priority-Fee, 1,5 s Verzögerung
 5. **Risk** – Stop-Loss, Take-Profit, Trailing-Stop, Exit wenn keine Trades mehr kommen, max. Haltezeit,
    Verkauf bei Abschluss der Bonding-Curve. Schwellen beziehen sich auf den Kurven-Preis; der PnL ist netto inkl. Gebühren.
 6. **Logger** – jede Entscheidung mit Grund in `trades.csv` und `log.txt`

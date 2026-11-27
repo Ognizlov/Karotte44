@@ -42,7 +42,9 @@
     }
   },
   "executor": {
+    "sizing": "fixed",
     "positionSizePct": 8,
+    "maxPositionPctOfEquity": 25,
     "feePct": 1,
     "priorityFeeSol": 0.0005,
     "delayMs": 1500,
@@ -96,7 +98,9 @@
       "minNetSol": 3,
       "minBuyers": 8,
       "minSells": 0,
-      "maxTopBuyerShare": 0
+      "maxTopBuyerShare": 0,
+      "maxTopHolderPct": 0,
+      "maxUnknownPct": 0
     },
     "risk": {
       "stopLossPct": -10,

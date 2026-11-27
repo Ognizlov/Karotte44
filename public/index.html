@@ -31,7 +31,7 @@ button{margin-top:12px;background:var(--acc);color:#fff;border:0;border-radius:8
 <section class="kpis">
  <div class="card kpi"><div class="l">Equity</div><div class="v" id="eq">-</div></div>
  <div class="card kpi"><div class="l">PnL</div><div class="v" id="pnl">-</div></div>
- <div class="card kpi"><div class="l">Cash</div><div class="v" id="cash">-</div></div>
+ <div class="card kpi"><div class="l">Cash</div><div class="v" id="cash">-</div><div class="l" id="cashsub"></div></div>
  <div class="card kpi"><div class="l">Trades / Winrate</div><div class="v" id="wr">-</div></div>
  <div class="card kpi"><div class="l">Trades letzte Std.</div><div class="v" id="tph">-</div></div>
  <div class="card kpi"><div class="l">Beobachtet</div><div class="v" id="watch">-</div></div>
@@ -58,7 +58,7 @@ function draw(pts,start){const c=$('chart'),r=devicePixelRatio||1,w=c.clientWidt
  g.beginPath();pts.forEach((p,i)=>i?g.lineTo(X(p.t),Y(p.v)):g.moveTo(X(p.t),Y(p.v)));g.strokeStyle=col;g.lineWidth=2;g.stroke();
  g.lineTo(X(t1),h-B);g.lineTo(X(t0),h-B);g.closePath();g.fillStyle=gr;g.fill();
  g.fillStyle='#7d869a';g.fillText(new Date(t0).toLocaleTimeString(),L,h-4);const e=new Date(t1).toLocaleTimeString();g.fillText(e,w-g.measureText(e).width-4,h-4)}
-const LBL={minRealSol:['Einstieg ab SOL in der Kurve',' SOL'],maxRealSol:['… bis höchstens',' SOL'],lookbackSeconds:['Kaufdruck gemessen über',' s'],minNetSol:['Min. Netto-Zufluss',' SOL'],minBuyers:['Min. Käufer',''],minSells:['Min. Verkäufe (gegen Pump-Fallen)',''],maxTopBuyerShare:['Max. Anteil größter Käufer (0 = aus)',''],exitRealSol:['Verkauf vor Migration ab',' SOL'],observeSeconds:['Einstieg nach',' s'],minScore:['Min. Score',''],minUniqueBuyers:['Min. Käufer',''],maxPriceChangePct:['Max. Δ bei Einstieg','%'],maxTop10Pct:['Max. Top-10-Holder (streng)','%'],stopLossPct:['Stop-Loss','%'],takeProfitPct:['Take-Profit','%'],trailingActivationPct:['Trailing ab','%'],trailingDistancePct:['Trailing-Abstand','%'],maxHoldMinutes:['Max. Haltezeit',' min'],stallExitSeconds:['Exit ohne Trades nach',' s']};
+const LBL={minRealSol:['Einstieg ab SOL in der Kurve',' SOL'],maxRealSol:['… bis höchstens',' SOL'],lookbackSeconds:['Kaufdruck gemessen über',' s'],minNetSol:['Min. Netto-Zufluss',' SOL'],minBuyers:['Min. Käufer',''],minSells:['Min. Verkäufe (gegen Pump-Fallen)',''],maxTopBuyerShare:['Max. Anteil größter Käufer (0 = aus)',''],maxTopHolderPct:['Whale-Filter: max. größte Wallet','% Supply'],maxUnknownPct:['Whale-Filter: max. unbekannte Bestände','% Supply'],exitRealSol:['Verkauf vor Migration ab',' SOL'],observeSeconds:['Einstieg nach',' s'],minScore:['Min. Score',''],minUniqueBuyers:['Min. Käufer',''],maxPriceChangePct:['Max. Δ bei Einstieg','%'],maxTop10Pct:['Max. Top-10-Holder (streng)','%'],stopLossPct:['Stop-Loss','%'],takeProfitPct:['Take-Profit','%'],trailingActivationPct:['Trailing ab','%'],trailingDistancePct:['Trailing-Abstand','%'],maxHoldMinutes:['Max. Haltezeit',' min'],stallExitSeconds:['Exit ohne Trades nach',' s']};
 function renderStrategy(st){document.getElementById('stratTitle').textContent=st.mode==='graduation'?'Strategie: ältere Tokens (aktiv)':'Strategie: neue Tokens (aktiv)';$('strat').innerHTML=Object.entries(st.params).map(([k,v])=>`<tr><td>${LBL[k][0]}</td><td>${v===0&&k!=='stopLossPct'?'aus':v+LBL[k][1]}${st.tunedKeys.includes(k)?'<span class="tuned">optimiert</span>':''}</td></tr>`).join('');
  $('stratsub').textContent=st.tunedAt?'Optimiert am '+new Date(st.tunedAt).toLocaleString():'Startwerte aus config.json (noch nicht optimiert)'}
 const row=(n,x)=>x?`<tr><td>${n}</td><td>${x.n}</td><td class="${cls(x.avgPct)}">${f(x.avgPct,2)}%</td><td>${f(x.winRate*100,0)}%</td><td class="${cls(x.solAt8pct)}">${x.solAt8pct>=0?'+':''}${f(x.solAt8pct,3)}</td></tr>`:'';
@@ -76,7 +76,7 @@ function addLog(l){const d=document.createElement('div'),box=$('log'),stick=box.
 let last;async function refresh(){try{const s=await (await fetch('/api/state')).json();last=s;
  $('conn').innerHTML=`<span class="dot ${s.connected?'on':''}"></span>${s.connected?'verbunden':'offline'} · ${s.msgCount} Msgs${s.mock?' · <b class="warn">MOCK-DATEN</b>':''}${s.tradesBlocked?' · <b class="error">Trades gesperrt: API-Key fehlt</b>':''}`;$('up').textContent='Uptime '+mmss(s.uptimeS);
  const p=s.equity-s.startCapital;$('eq').textContent=f(s.equity)+' SOL';$('pnl').innerHTML=`<span class="${cls(p)}">${p>=0?'+':''}${f(p)} (${f(p/s.startCapital*100,2)}%)</span>`;
- $('cash').textContent=f(s.cash)+' SOL';$('wr').textContent=`${s.stats.trades} / ${f(s.stats.winRate*100,0)}%`;$('watch').textContent=s.stats.watching;
+ $('cash').textContent=f(s.cash)+' SOL';$('cashsub').textContent=`Einsatz/Trade ${f(s.positionSize,3)} SOL (${s.sizing})`;$('wr').textContent=`${s.stats.trades} / ${f(s.stats.winRate*100,0)}%`;$('watch').textContent=s.stats.watching;
  $('tph').textContent=s.stats.tradesLastHour;
  const u=s.usage,fd=s.feed;
  if(fd.source==='solana'){$('costlbl').textContent='Daten (Solana, kostenlos)';$('cost').textContent=f(fd.coverage*100,1)+' %';

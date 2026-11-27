@@ -86,7 +86,11 @@ class Bot {
 
   // ---------- 1. Scout ----------
   scout(m) {
-    if (this.mode !== 'newTokens') return; // graduation strategy finds its tokens via the scanner
+    if (this.mode !== 'newTokens') {
+      // graduation: a token seen from its creation gets full wallet tracking (whale check later on)
+      if (m.mint && !this.scanner.has(m.mint)) { const st = G.newState(m.mint, true); st.lastTrade = Date.now(); this.scanner.set(m.mint, st); }
+      return;
+    }
     if (!m.mint || this.tokens.has(m.mint)) return;
     const watching = this.watchingCount();
     if (watching >= this.cfg.scout.maxWatching) { this.touch('scout', `übersprungen ${m.symbol} (Kapazität)`); return; }
@@ -159,7 +163,7 @@ class Bot {
     if (!G.isStandard(e)) return; // only standard SOL curves (no Mayhem mode, no other quote currency)
     const g = this.cfg.graduation, now = Date.now();
     let st = this.scanner.get(e.mint);
-    if (!st) { st = G.newState(e.mint); this.scanner.set(e.mint, st); }
+    if (!st) { st = G.newState(e.mint, false); this.scanner.set(e.mint, st); } // seen mid-life: wallets unknown
     G.apply(st, e, now, g.bufferSeconds * 1000);
     let t = this.tokens.get(e.mint);
     if (!this.gradTracked.has(e.mint)) {
@@ -169,7 +173,7 @@ class Bot {
       this.tokens.set(e.mint, t);
       this.feed.watch(e.mint);
       this.gradTracked.set(e.mint, { since: now });
-      this.gradRec.start(e.mint, now, st.buf, this.equityNow() * this.cfg.executor.positionSizePct / 100);
+      this.gradRec.start(e.mint, now, st.buf, this.positionSize(), st.holders);
       this.touch('scout', `verfolge ${t.symbol} (${st.real.toFixed(1)} SOL in der Kurve)`);
       this.logger.log('scout', `Verfolge ${t.symbol}… – ${st.real.toFixed(1)} SOL in der Kurve`);
     } else {
@@ -250,7 +254,7 @@ class Bot {
     const r = this.baseCfg.research;
     if (!r.enabled || (this.feed.billed && this.usage.ratio() >= 0.8)) return;
     const ex = this.cfg.executor, maxW = Math.max(...this.observeWindows()) * 1000;
-    this.recorder.start(t, this.equityNow() * ex.positionSizePct / 100);
+    this.recorder.start(t, this.positionSize());
     // After the longest observation window: keep only tokens that would be a candidate in some window.
     setTimeout(() => {
       const rec = this.recorder.get(t.mint);
@@ -264,10 +268,19 @@ class Bot {
   }
 
   // ---------- 4. Executor ----------
+  // Position size: fixed (positionSizePct of the start capital) or a percentage of current equity;
+  // never more than maxPositionPctOfEquity of the current equity.
+  positionSize() {
+    const e = this.cfg.executor, eq = this.equityNow();
+    let size = (e.sizing === 'percent' ? eq : this.cfg.startCapital) * (e.positionSizePct / 100);
+    if (e.maxPositionPctOfEquity > 0) size = Math.min(size, eq * (e.maxPositionPctOfEquity / 100));
+    return size;
+  }
+
   async executeBuy(t, info = {}) {
     const e = this.cfg.executor;
     if (this.positions.size + this.pendingBuys >= e.maxOpenPositions) return this.reject(t, 'executor', `Max. ${e.maxOpenPositions} offene Positionen`);
-    const size = this.equityNow() * (e.positionSizePct / 100);
+    const size = this.positionSize();
     if (this.cash < size + e.priorityFeeSol) return this.reject(t, 'executor', `Zu wenig Cash (${fmt(this.cash)} SOL)`);
     t.stage = 'buying';
     this.cash -= size + e.priorityFeeSol; // reserve funds during latency
@@ -285,7 +298,7 @@ class Bot {
     this.touch('executor', `✓ BUY ${t.symbol} ${fmt(size)} SOL`);
     this.logger.decision('executor', 'BUY', { mint: t.mint, symbol: t.symbol, price: price.toExponential(4), sol: fmt(pos.costSol, 5),
       tokens: Math.round(tokens), score: t.score === undefined ? '' : fmt(t.score, 3),
-      reason: `Sim-Kauf${info.mode === 'grad' ? ' (Graduation)' : ''} ${e.positionSizePct}% Kapital, Fee ${e.feePct}%, Prio ${e.priorityFeeSol} SOL, Delay ${e.delayMs}ms` });
+      reason: `Sim-Kauf${info.mode === 'grad' ? ' (Graduation)' : ''} ${fmt(size, 4)} SOL (${e.sizing === 'percent' ? e.positionSizePct + '% vom Guthaben' : 'fester Einsatz'}), Fee ${e.feePct}%, Prio ${e.priorityFeeSol} SOL, Delay ${e.delayMs}ms` });
   }
 
   liquidation(t, pos) {
@@ -414,12 +427,13 @@ class Bot {
     else for (const sec of ['filter', 'analyst', 'risk']) diff(this.cfg[sec], this.baseCfg[sec]);
     const a = this.cfg.analyst, r = grad ? g.risk : this.cfg.risk;
     const entryParams = grad
-      ? { minRealSol: g.entry.minRealSol, maxRealSol: g.entry.maxRealSol, lookbackSeconds: g.entry.lookbackSeconds, minNetSol: g.entry.minNetSol, minBuyers: g.entry.minBuyers, minSells: g.entry.minSells || 0, maxTopBuyerShare: g.entry.maxTopBuyerShare || 0 }
+      ? { minRealSol: g.entry.minRealSol, maxRealSol: g.entry.maxRealSol, lookbackSeconds: g.entry.lookbackSeconds, minNetSol: g.entry.minNetSol, minBuyers: g.entry.minBuyers, minSells: g.entry.minSells || 0, maxTopBuyerShare: g.entry.maxTopBuyerShare || 0, maxTopHolderPct: g.entry.maxTopHolderPct || 0, maxUnknownPct: g.entry.maxUnknownPct || 0 }
       : { observeSeconds: this.cfg.filter.observeSeconds, minScore: a.minScore, minUniqueBuyers: a.minUniqueBuyers, maxPriceChangePct: a.maxPriceChangePct, maxTop10Pct: a.maxTop10Pct || 0 };
     return {
       connected: this.feed.connected, tradesBlocked: this.feed.tradesBlocked, mock: process.env.MOCK === '1',
       msgCount: this.feed.msgCount, uptimeS: Math.round((Date.now() - this.startedAt) / 1000),
-      cash: this.cash, equity: this.equityNow(), startCapital: this.cfg.startCapital,
+      cash: this.cash, equity: this.equityNow(), startCapital: this.cfg.startCapital, positionSize: this.positionSize(),
+      sizing: this.cfg.executor.sizing === 'percent' ? `${this.cfg.executor.positionSizePct}% vom Guthaben` : 'fest',
       agents: this.agents, equityCurve: this.equity,
       positions: [...this.positions.values()].map((p) => ({ symbol: p.symbol, mint: p.mint, costSol: p.costSol,
         pnlPct: p.netPct, trailing: p.trailing, heldS: Math.round((Date.now() - p.openedAt) / 1000) })),
