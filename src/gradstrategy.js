@@ -16,12 +16,14 @@ function apply(st, e, now, keepMs) {
 }
 
 function momentum(st, now, lookbackMs) {
-  let net = 0, buys = 0, sells = 0; const buyers = new Set();
+  let net = 0, buys = 0, sells = 0, buySol = 0; const perBuyer = new Map();
   for (const [t, b, sol, u] of st.buf) {
     if (t < now - lookbackMs) continue;
-    if (b) { net += sol; buys++; buyers.add(u); } else { net -= sol; sells++; }
+    if (b) { net += sol; buys++; buySol += sol; perBuyer.set(u, (perBuyer.get(u) || 0) + sol); } else { net -= sol; sells++; }
   }
-  return { net, buys, sells, buyers: buyers.size };
+  let top = 0; for (const v of perBuyer.values()) if (v > top) top = v;
+  // topShare: share of the buying that came from the single largest buyer (one wallet pumping = dump risk)
+  return { net, buys, sells, buyers: perBuyer.size, topShare: buySol > 0 ? top / buySol : 0 };
 }
 
 // Entry: curve progress within [minRealSol, maxRealSol] and strong recent buying.
@@ -31,10 +33,11 @@ function signal(st, now, en) {
   if (m.net < en.minNetSol || m.buyers < en.minBuyers) return null;
   // only buys and no sells at all is typical for a coordinated pump right before a dump
   if (en.minSells > 0 && m.sells < en.minSells) return null;
+  if (en.maxTopBuyerShare > 0 && m.topShare > en.maxTopBuyerShare) return null;
   return m;
 }
 function describeSignal(st, m, en) {
-  return `${st.real.toFixed(1)} SOL in der Kurve, letzte ${en.lookbackSeconds}s: netto ${m.net >= 0 ? '+' : ''}${m.net.toFixed(2)} SOL, ${m.buyers} Käufer, ${m.buys}/${m.sells} Käufe/Verkäufe`;
+  return `${st.real.toFixed(1)} SOL in der Kurve, letzte ${en.lookbackSeconds}s: netto ${m.net >= 0 ? '+' : ''}${m.net.toFixed(2)} SOL, ${m.buyers} Käufer, ${m.buys}/${m.sells} Käufe/Verkäufe, größter Käufer ${(m.topShare * 100).toFixed(0)}%`;
 }
 
 // ---- Replay of a recorded token: { users, trades: [[dt, isBuy, sol, userIdx, vSol, vTokens, slot]], trackDt, events, endDt }

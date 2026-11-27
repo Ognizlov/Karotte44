@@ -175,8 +175,8 @@ function optimizeGrad(base, live) {
   // entry grid; every (token, entry rule) gives at most one entry, identical entries are simulated once
   const entries = [];
   for (const minRealSol of [25, 35, 45, 55]) for (const lookbackSeconds of [30, 60, 120]) for (const minNetSol of [0, 2, 5, 10])
-    for (const minBuyers of [0, 5, 10, 20]) for (const minSells of [0, 3])
-      entries.push({ minRealSol, maxRealSol: minRealSol + 25, lookbackSeconds, minNetSol, minBuyers, minSells });
+    for (const minBuyers of [0, 5, 10, 20]) for (const minSells of [0, 3]) for (const maxTopBuyerShare of [0, 0.5, 0.3])
+      entries.push({ minRealSol, maxRealSol: minRealSol + 25, lookbackSeconds, minNetSol, minBuyers, minSells, maxTopBuyerShare });
   const allEntries = [...entries, live.graduation.entry];
   const cands = [], key = new Map(), idxOf = allEntries.map(() => []);
   recs.forEach((rec, ti) => {

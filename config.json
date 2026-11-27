@@ -95,7 +95,8 @@
       "lookbackSeconds": 60,
       "minNetSol": 3,
       "minBuyers": 8,
-      "minSells": 0
+      "minSells": 0,
+      "maxTopBuyerShare": 0
     },
     "risk": {
       "stopLossPct": -10,
