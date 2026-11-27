@@ -27,7 +27,18 @@ Kein API-Key, keine Gebühren.
 Alternative (kostenpflichtig): `"source": "pumpportal"` in `config.json` – PumpPortal berechnet 0,01 SOL pro
 10.000 Trade-Nachrichten und verlangt ≥ 0,02 SOL Guthaben auf der Wallet des API-Keys. Dafür gilt das Budget `dataCost.maxSolPerDay`.
 
-## Pipeline (`src/bot.js`, Regeln in `src/strategy.js`)
+## Strategien (`config.json` → `strategy`)
+- **`graduation` (Standard): ältere Tokens.** Ein Scanner verfolgt alle laufenden Pump.fun-Kurven (nur Standard-SOL-Kurven).
+  Ab `trackRealSol` (20 SOL echtes SOL in der Kurve) wird ein Token beobachtet und aufgezeichnet (`data/grad-*.jsonl`).
+  Kauf, wenn die Kurve zwischen `minRealSol` und `maxRealSol` liegt **und** in den letzten `lookbackSeconds` starker Kaufdruck
+  herrscht (Netto-Zufluss ≥ `minNetSol`, ≥ `minBuyers` Käufer, optional ≥ `minSells` Verkäufe gegen abgesprochene Pumps).
+  Ausstieg: Stop-Loss, Take-Profit, Trailing-Stop, Haltezeit, keine Trades mehr, und Verkauf vor der Migration ab `exitRealSol`.
+  Regeln in `src/gradstrategy.js`, Parameter unter `graduation` in `config.json`.
+- **`newTokens`: brandneue Tokens** in den ersten Sekunden (Pipeline unten).
+
+Der Optimizer arbeitet für die aktive Strategie: Er spielt die aufgezeichneten Tokens mit exakt der Live-Logik nach.
+
+## Pipeline für neue Tokens (`src/bot.js`, Regeln in `src/strategy.js`)
 1. **Scout** – neue Tokens
 2. **Filter** – 30 s beobachten; verwerfen bei Dev-Initialbuy > 8 %, Dev-Verkauf, Top-10-Holder > 30 %
 3. **Analyst** – Score 0–1 (Käufer, Buy/Sell, Volumen, Preisänderung); Kauf ab `minScore`.

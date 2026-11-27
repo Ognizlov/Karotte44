@@ -7,6 +7,8 @@ const Logger = require('./logger');
 const Recorder = require('./recorder');
 const Usage = require('./usage');
 const S = require('./strategy');
+const G = require('./gradstrategy');
+const GradRecorder = require('./gradrecorder');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const fmt = (x, d = 4) => Number(x).toFixed(d);
@@ -27,6 +29,11 @@ class Bot {
     else this.feed = new (require('./solanafeed'))(baseCfg.solana, this.logger);
     this.usage = new Usage(path.join(this.dataDir, 'usage.json'), baseCfg.dataCost);
     this.recorder = new Recorder(this.dataDir);
+    // Strategy: 'graduation' (older tokens with SOL in the curve + buying momentum) or 'newTokens' (first seconds)
+    this.mode = baseCfg.strategy === 'newTokens' ? 'newTokens' : 'graduation';
+    this.scanner = new Map();               // mint -> graduation state of every active standard curve
+    this.gradRec = new GradRecorder(this.dataDir);
+    this.gradTracked = new Map();           // mint -> { since }
     this.cash = baseCfg.startCapital;
     this.pendingSol = 0; this.pendingBuys = 0; // buys in flight (latency)
     this.tokens = new Map();     // mint -> observed token state
@@ -54,6 +61,10 @@ class Bot {
     this.feed.on('trade', (m) => this.onTrade(m));
     this.feed.on('invalid', (m) => this.onInvalid(m));
     this.feed.on('complete', (m) => this.onComplete(m));
+    if (this.mode === 'graduation') {
+      this.feed.on('curve', (e) => this.onCurve(e));
+      setInterval(() => this.gradHousekeeping(), 10000);
+    }
     this.feed.connect();
     setInterval(() => this.riskTick(), this.cfg.risk.checkIntervalMs);
     setInterval(() => this.recordEquity(), 5000);
@@ -64,17 +75,18 @@ class Bot {
     }
   }
 
-  stop() { this.recorder.finishAll(Date.now()); this.usage.save(); }
+  stop() { this.recorder.finishAll(Date.now()); this.gradRec.finishAll(Date.now()); this.usage.save(); }
 
   // A token stays subscribed while it is observed, held, or recorded as research candidate.
   release(t) {
-    if (t.stage === 'watching' || t.stage === 'buying' || this.positions.has(t.mint) || this.recorder.isActive(t.mint)) return;
+    if (t.stage === 'watching' || t.stage === 'buying' || this.positions.has(t.mint) || this.recorder.isActive(t.mint) || this.gradTracked.has(t.mint)) return;
     this.feed.unwatch(t.mint);
     if (!t.deleteTimer) t.deleteTimer = setTimeout(() => this.tokens.delete(t.mint), 60000);
   }
 
   // ---------- 1. Scout ----------
   scout(m) {
+    if (this.mode !== 'newTokens') return; // graduation strategy finds its tokens via the scanner
     if (!m.mint || this.tokens.has(m.mint)) return;
     const watching = this.watchingCount();
     if (watching >= this.cfg.scout.maxWatching) { this.touch('scout', `übersprungen ${m.symbol} (Kapazität)`); return; }
@@ -102,7 +114,7 @@ class Bot {
     if (this.feed.billed) this.usage.add(1); // only PumpPortal charges per message
     if (this.feed.tradesBlocked) { this.feed.tradesBlocked = false; this.logger.log('feed', 'Trade-Daten kommen wieder an'); }
     const t = this.tokens.get(m.mint);
-    if (!t) return;
+    if (!t || t.mode === 'grad') return; // graduation tokens are driven by the scanner (onCurve)
     const now = Date.now();
     S.applyTrade(t, m, now);
     this.recorder.trade(t.mint, now, m);
@@ -118,6 +130,7 @@ class Bot {
     const t = this.tokens.get(m.mint);
     if (!t) return;
     this.recorder.event(m.mint, Date.now(), 'invalid');
+    this.gradRec.event(m.mint, Date.now(), 'invalid');
     const pos = this.positions.get(m.mint);
     if (pos && !pos.selling) {
       const reason = `${m.reason} – Verkauf zum letzten gültigen Kurs`;
@@ -131,12 +144,71 @@ class Bot {
     const t = this.tokens.get(m.mint);
     if (!t) return;
     this.recorder.event(m.mint, Date.now(), 'complete');
+    this.gradRec.event(m.mint, Date.now(), 'complete');
+    if (this.gradTracked.has(m.mint)) this.endTracking(m.mint, 'Kurve abgeschlossen');
     const pos = this.positions.get(m.mint);
     if (pos && !pos.selling) {
       const reason = 'Bonding-Curve abgeschlossen (Migration) – Verkauf zum letzten Kurven-Preis';
       this.logger.decision('risk', 'EXIT', { mint: t.mint, symbol: t.symbol, price: (t.vSol / t.vTokens).toExponential(4), pnlPct: fmt(pos.netPct, 2), reason });
       this.executeSell(t, pos, reason);
     } else if (t.stage === 'watching') { clearTimeout(t.timer); this.reject(t, 'filter', 'Bonding-Curve bereits abgeschlossen'); }
+  }
+
+  // ---------- Graduation strategy: scanner over all running tokens ----------
+  onCurve(e) {
+    if (!G.isStandard(e)) return; // only standard SOL curves (no Mayhem mode, no other quote currency)
+    const g = this.cfg.graduation, now = Date.now();
+    let st = this.scanner.get(e.mint);
+    if (!st) { st = G.newState(e.mint); this.scanner.set(e.mint, st); }
+    G.apply(st, e, now, g.bufferSeconds * 1000);
+    let t = this.tokens.get(e.mint);
+    if (!this.gradTracked.has(e.mint)) {
+      // 1. Scout: start following a token once its curve holds enough real SOL
+      if (st.done || t || st.real < g.trackRealSol) return;
+      t = { mint: e.mint, symbol: e.mint.slice(0, 6), mode: 'grad', stage: 'grad', createdAt: now, vSol: st.S, vTokens: st.T, lastTrade: now };
+      this.tokens.set(e.mint, t);
+      this.feed.watch(e.mint);
+      this.gradTracked.set(e.mint, { since: now });
+      this.gradRec.start(e.mint, now, st.buf, this.equityNow() * this.cfg.executor.positionSizePct / 100);
+      this.touch('scout', `verfolge ${t.symbol} (${st.real.toFixed(1)} SOL in der Kurve)`);
+      this.logger.log('scout', `Verfolge ${t.symbol}… – ${st.real.toFixed(1)} SOL in der Kurve`);
+    } else {
+      this.gradRec.trade(e.mint, now, e);
+    }
+    if (!t) return;
+    t.vSol = st.S; t.vTokens = st.T; t.lastTrade = now;
+    if (this.positions.has(e.mint)) return this.checkPosition(t);
+    if (st.entered || t.stage === 'buying') return;
+    // 2./3. Filter + Analyst: progress window and buying momentum (one entry per token)
+    const m = G.signal(st, now, g.entry);
+    if (!m) return;
+    st.entered = true;
+    const why = G.describeSignal(st, m, g.entry);
+    this.touch('analyst', `✓ ${t.symbol}: ${why}`);
+    this.logger.decision('analyst', 'APPROVE', { mint: t.mint, symbol: t.symbol, reason: `Graduation-Signal: ${why}` });
+    this.executeBuy(t, { mode: 'grad', reason: why });
+  }
+
+  endTracking(mint, why) {
+    const tr = this.gradTracked.get(mint);
+    if (!tr) return;
+    this.gradTracked.delete(mint);
+    this.gradRec.finish(mint, Date.now());
+    const st = this.scanner.get(mint); if (st) st.done = true;
+    const t = this.tokens.get(mint);
+    if (t && !this.positions.has(mint)) { t.stage = 'done'; this.release(t); }
+  }
+
+  gradHousekeeping() {
+    const g = this.cfg.graduation, now = Date.now();
+    for (const [mint, tr] of this.gradTracked) {
+      const t = this.tokens.get(mint);
+      if (now - tr.since >= g.maxTrackMinutes * 60000) this.endTracking(mint, 'Zeit');
+      else if (t && now - t.lastTrade >= g.inactiveMinutes * 60000) this.endTracking(mint, 'inaktiv');
+    }
+    // forget curves without trades for 15 min (keeps the scanner small)
+    for (const [mint, st] of this.scanner) if (now - st.lastTrade > 15 * 60000 && !this.gradTracked.has(mint)) this.scanner.delete(mint);
+    this.agents.scout.state = `verfolgt ${this.gradTracked.size} · scannt ${this.scanner.size}`;
   }
 
   reject(t, module, reason, extra = {}) {
@@ -192,7 +264,7 @@ class Bot {
   }
 
   // ---------- 4. Executor ----------
-  async executeBuy(t) {
+  async executeBuy(t, info = {}) {
     const e = this.cfg.executor;
     if (this.positions.size + this.pendingBuys >= e.maxOpenPositions) return this.reject(t, 'executor', `Max. ${e.maxOpenPositions} offene Positionen`);
     const size = this.equityNow() * (e.positionSizePct / 100);
@@ -206,14 +278,14 @@ class Bot {
     const { tokens, solNet } = S.quoteBuy(t.vSol, t.vTokens, size, e.feePct);
     const price = t.vSol / t.vTokens;
     const pos = { mint: t.mint, symbol: t.symbol, tokens, solNet, costSol: size + e.priorityFeeSol, entryPrice: price,
-      peakPrice: price, openedAt: Date.now(), trailing: false, selling: false, netPct: 0, score: t.score };
+      peakPrice: price, openedAt: Date.now(), trailing: false, selling: false, netPct: 0, score: t.score, mode: info.mode || 'new' };
     this.positions.set(t.mint, pos);
     t.stage = 'position';
     this.agents.executor.state = 'idle';
     this.touch('executor', `✓ BUY ${t.symbol} ${fmt(size)} SOL`);
     this.logger.decision('executor', 'BUY', { mint: t.mint, symbol: t.symbol, price: price.toExponential(4), sol: fmt(pos.costSol, 5),
-      tokens: Math.round(tokens), score: fmt(t.score, 3),
-      reason: `Sim-Kauf ${e.positionSizePct}% Kapital, Fee ${e.feePct}%, Prio ${e.priorityFeeSol} SOL, Delay ${e.delayMs}ms` });
+      tokens: Math.round(tokens), score: t.score === undefined ? '' : fmt(t.score, 3),
+      reason: `Sim-Kauf${info.mode === 'grad' ? ' (Graduation)' : ''} ${e.positionSizePct}% Kapital, Fee ${e.feePct}%, Prio ${e.priorityFeeSol} SOL, Delay ${e.delayMs}ms` });
   }
 
   liquidation(t, pos) {
@@ -246,9 +318,9 @@ class Bot {
   checkPosition(t) {
     const pos = this.positions.get(t.mint);
     if (!pos || pos.selling) return;
-    const r = this.cfg.risk, now = Date.now(), price = t.vSol / t.vTokens;
+    const r = pos.mode === 'grad' ? this.cfg.graduation.risk : this.cfg.risk, now = Date.now(), price = t.vSol / t.vTokens;
     const wasTrailing = pos.trailing;
-    const code = S.priceExit(pos, price, r) || S.timeExit(now - pos.openedAt, now - Math.max(t.lastTrade, pos.openedAt), r);
+    const code = S.priceExit(pos, price, r, t.vSol) || S.timeExit(now - pos.openedAt, now - Math.max(t.lastTrade, pos.openedAt), r);
     pos.netPct = (this.liquidation(t, pos) / pos.costSol - 1) * 100;
     if (pos.trailing && !wasTrailing) {
       this.touch('risk', `Trailing aktiv ${t.symbol}`);
@@ -265,6 +337,7 @@ class Bot {
   riskTick() {
     this.agents.risk.state = this.positions.size ? `überwacht ${this.positions.size}` : 'idle';
     for (const pos of this.positions.values()) { const t = this.tokens.get(pos.mint); if (t) this.checkPosition(t); }
+    if (this.mode === 'graduation') { if (!this.feed.connected) this.agents.scout.state = 'offline'; return; }
     const w = this.watchingCount();
     this.agents.scout.state = !this.feed.connected ? 'offline' : this.feed.billed && this.usage.overBudget() ? 'Budget erreicht' : `beobachtet ${w}`;
     this.agents.filter.state = w ? `prüft ${w}` : 'idle';
@@ -306,6 +379,7 @@ class Bot {
       this.tuned = JSON.parse(fs.readFileSync(this.tunedPath, 'utf8'));
       const merged = S.mergeConfig(this.baseCfg, this.tuned);
       Object.assign(this.cfg.filter, merged.filter); Object.assign(this.cfg.analyst, merged.analyst); Object.assign(this.cfg.risk, merged.risk);
+      if (merged.graduation) { Object.assign(this.cfg.graduation.entry, merged.graduation.entry); Object.assign(this.cfg.graduation.risk, merged.graduation.risk); }
       this.agents.optimizer.state = 'angewendet';
       this.touch('optimizer', `✓ neue Parameter (${sum(b.all)})`);
       this.logger.decision('optimizer', 'APPLY', { reason: `${rep.reason}. ${msg}. Neu: ${JSON.stringify(b.params)}` });
@@ -334,8 +408,14 @@ class Bot {
     const wins = this.closed.filter((c) => c.pnl > 0).length;
     const hourAgo = Date.now() - 3600000;
     const tunedKeys = [];  // parameters where the optimizer deviates from config.json
-    for (const sec of ['filter', 'analyst', 'risk']) for (const k of Object.keys(this.cfg[sec])) if (typeof this.cfg[sec][k] !== 'object' && this.cfg[sec][k] !== this.baseCfg[sec][k]) tunedKeys.push(k);
-    const a = this.cfg.analyst, r = this.cfg.risk;
+    const diff = (cur, base) => { for (const k of Object.keys(cur)) if (typeof cur[k] !== 'object' && cur[k] !== base[k]) tunedKeys.push(k); };
+    const grad = this.mode === 'graduation', g = this.cfg.graduation;
+    if (grad) { diff(g.entry, this.baseCfg.graduation.entry); diff(g.risk, this.baseCfg.graduation.risk); }
+    else for (const sec of ['filter', 'analyst', 'risk']) diff(this.cfg[sec], this.baseCfg[sec]);
+    const a = this.cfg.analyst, r = grad ? g.risk : this.cfg.risk;
+    const entryParams = grad
+      ? { minRealSol: g.entry.minRealSol, maxRealSol: g.entry.maxRealSol, lookbackSeconds: g.entry.lookbackSeconds, minNetSol: g.entry.minNetSol, minBuyers: g.entry.minBuyers, minSells: g.entry.minSells || 0 }
+      : { observeSeconds: this.cfg.filter.observeSeconds, minScore: a.minScore, minUniqueBuyers: a.minUniqueBuyers, maxPriceChangePct: a.maxPriceChangePct, maxTop10Pct: a.maxTop10Pct || 0 };
     return {
       connected: this.feed.connected, tradesBlocked: this.feed.tradesBlocked, mock: process.env.MOCK === '1',
       msgCount: this.feed.msgCount, uptimeS: Math.round((Date.now() - this.startedAt) / 1000),
@@ -345,13 +425,13 @@ class Bot {
         pnlPct: p.netPct, trailing: p.trailing, heldS: Math.round((Date.now() - p.openedAt) / 1000) })),
       closed: this.closed.slice(-30).reverse(),
       stats: { trades: this.closed.length, wins, winRate: this.closed.length ? wins / this.closed.length : 0,
-        tradesLastHour: this.closed.filter((c) => c.closedAt > hourAgo).length, watching: this.watchingCount() },
+        tradesLastHour: this.closed.filter((c) => c.closedAt > hourAgo).length, watching: grad ? this.gradTracked.size : this.watchingCount() },
       usage: { ...this.usage.state(), billed: !!this.feed.billed },
       feed: this.feed.info ? this.feed.info() : { source: process.env.MOCK === '1' ? 'mock' : 'pumpportal' },
-      research: { active: this.recorder.active.size, recorded: this.recorder.written },
+      research: grad ? { active: this.gradRec.active.size, recorded: this.gradRec.written } : { active: this.recorder.active.size, recorded: this.recorder.written },
       strategy: {
-        tunedKeys, tunedAt: this.tuned ? this.tuned.at : null,
-        params: { observeSeconds: this.cfg.filter.observeSeconds, minScore: a.minScore, minUniqueBuyers: a.minUniqueBuyers, maxPriceChangePct: a.maxPriceChangePct, maxTop10Pct: a.maxTop10Pct || 0,
+        mode: this.mode, tunedKeys, tunedAt: this.tuned ? this.tuned.at : null,
+        params: { ...entryParams, ...(grad ? { exitRealSol: r.exitRealSol } : {}),
           stopLossPct: r.stopLossPct, takeProfitPct: r.takeProfitPct, trailingActivationPct: r.trailingActivationPct,
           trailingDistancePct: r.trailingDistancePct, maxHoldMinutes: r.maxHoldMinutes, stallExitSeconds: r.stallExitSeconds },
       },

@@ -59,8 +59,10 @@ function quoteSell(S, T, tokens, solNet, feePct) {
 }
 
 // ---- Exit rules (thresholds refer to the curve price vs. the price at our fill) ----
-function priceExit(pos, price, r) {
+function priceExit(pos, price, r, S) {
   if (price > pos.peakPrice) pos.peakPrice = price;
+  // Graduation strategy: sell before the curve completes (virtual SOL = real SOL + 30 on standard curves)
+  if (r.exitRealSol > 0 && S !== undefined && S - 30 >= r.exitRealSol) return 'GRAD';
   const chg = (price / pos.entryPrice - 1) * 100;
   if (!pos.trailing && (pos.peakPrice / pos.entryPrice - 1) * 100 >= r.trailingActivationPct) pos.trailing = true;
   if (chg <= r.stopLossPct) return 'SL';
@@ -82,6 +84,7 @@ function describeExit(code, pos, price, r) {
     TRAIL: `Trailing-Stop: ${r.trailingDistancePct}% unter Hoch (+${peak}%), aktuell ${chg}%`,
     STALL: `Kein Trade seit ${r.stallExitSeconds}s – Momentum weg (${chg}%)`,
     TIME: `Max. Haltezeit ${r.maxHoldMinutes} min (${chg}%)`,
+    GRAD: `Kurve fast voll (≥ ${r.exitRealSol} SOL) – Verkauf vor der Migration (${chg}%)`,
   }[code];
 }
 
@@ -101,7 +104,7 @@ function simulateExit(path, endDt, r, delayMs) {
       trig = tTime; code = tTime === hold ? 'TIME' : 'STALL'; break;
     }
     const p = path[i++]; lastTrade = p[0];
-    code = priceExit(pos, p[1] / p[2], r);
+    code = priceExit(pos, p[1] / p[2], r, p[1]);
     if (code) { trig = p[0]; break; }
   }
   // Order lands after the latency: use the curve state at trigger + delay.
@@ -176,7 +179,9 @@ function pathAfter(rec, fillMs) {
 // config.json + optimizer overrides (data/tuned.json) -> live parameters
 function mergeConfig(base, tuned) {
   const c = JSON.parse(JSON.stringify(base));
-  if (tuned) for (const sec of ['filter', 'analyst', 'risk']) Object.assign(c[sec], (tuned.params || {})[sec] || {});
+  const tp = (tuned && tuned.params) || {};
+  for (const sec of ['filter', 'analyst', 'risk']) Object.assign(c[sec], tp[sec] || {});
+  if (c.graduation && tp.graduation) for (const sec of ['entry', 'risk']) Object.assign(c.graduation[sec], tp.graduation[sec] || {});
   return c;
 }
 

@@ -1,4 +1,5 @@
 {
+  "strategy": "graduation",
   "source": "solana",
   "solana": {
     "wsUrls": [
@@ -82,6 +83,29 @@
   "dataCost": {
     "solPer10kMessages": 0.01,
     "maxSolPerDay": 0.05
+  },
+  "graduation": {
+    "trackRealSol": 20,
+    "maxTrackMinutes": 30,
+    "inactiveMinutes": 3,
+    "bufferSeconds": 120,
+    "entry": {
+      "minRealSol": 35,
+      "maxRealSol": 60,
+      "lookbackSeconds": 60,
+      "minNetSol": 3,
+      "minBuyers": 8,
+      "minSells": 0
+    },
+    "risk": {
+      "stopLossPct": -10,
+      "takeProfitPct": 20,
+      "trailingActivationPct": 10,
+      "trailingDistancePct": 6,
+      "maxHoldMinutes": 5,
+      "stallExitSeconds": 60,
+      "exitRealSol": 78
+    }
   },
   "logger": {
     "tradesCsv": "trades.csv",

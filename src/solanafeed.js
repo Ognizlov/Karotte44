@@ -212,6 +212,7 @@ class SolanaFeed extends EventEmitter {
         }
       } else if (e.kind === 'trade') {
         this.st.trades++;
+        this.emit('curve', { mint: e.mint, isBuy: e.isBuy, sol: e.sol, tokens: e.tokens, user: e.user, vSol: e.vSol, vTokens: e.vTokens, realSol: e.realSol, slot });
         if (e === devBuy) continue; // already part of the create event
         const w = this.watched.get(e.mint);
         if (!w || w.invalid) continue;
@@ -230,7 +231,7 @@ class SolanaFeed extends EventEmitter {
         this.emit('trade', { txType: e.isBuy ? 'buy' : 'sell', mint: e.mint, traderPublicKey: e.user, solAmount: e.sol,
           tokenAmount: e.tokens, newTokenBalance: nb, vSolInBondingCurve: w.curve.S, vTokensInBondingCurve: w.curve.T,
           slot, tradeVSol: e.vSol, signature: this.sig });
-      } else if (e.kind === 'complete' && this.watched.has(e.mint)) {
+      } else if (e.kind === 'complete') {
         this.emit('complete', { mint: e.mint });
       }
     }

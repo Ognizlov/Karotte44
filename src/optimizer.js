@@ -8,6 +8,7 @@
 const fs = require('fs');
 const path = require('path');
 const S = require('./strategy');
+const G = require('./gradstrategy');
 
 const root = path.join(__dirname, '..');
 const dataDir = path.join(root, 'data');
@@ -154,6 +155,94 @@ function optimize(base, live) {
   };
 }
 
+// ---------------- Graduation strategy (older tokens) ----------------
+function loadGrad(lookbackHours) {
+  const since = Date.now() - lookbackHours * 3600000, out = [];
+  if (!fs.existsSync(dataDir)) return out;
+  for (const f of fs.readdirSync(dataDir).filter((x) => /^grad-.*\.jsonl$/.test(x)).sort()) {
+    for (const line of fs.readFileSync(path.join(dataDir, f), 'utf8').split('\n')) {
+      if (!line) continue;
+      try { const r = JSON.parse(line); if (r.v === 'g1' && r.startAt >= since) out.push(r); } catch {}
+    }
+  }
+  return out.sort((a, b) => a.startAt - b.startAt).slice(-2500);
+}
+
+function optimizeGrad(base, live) {
+  const o = base.optimizer, ex = base.executor, g = base.graduation, keep = g.bufferSeconds * 1000;
+  const recs = loadGrad(o.lookbackHours);
+  const report = { at: Date.now(), tokens: recs.length, minTrades: o.minTrades, strategy: 'graduation' };
+  // entry grid; every (token, entry rule) gives at most one entry, identical entries are simulated once
+  const entries = [];
+  for (const minRealSol of [25, 35, 45, 55]) for (const lookbackSeconds of [30, 60, 120]) for (const minNetSol of [0, 2, 5, 10])
+    for (const minBuyers of [0, 5, 10, 20]) for (const minSells of [0, 3])
+      entries.push({ minRealSol, maxRealSol: minRealSol + 25, lookbackSeconds, minNetSol, minBuyers, minSells });
+  const allEntries = [...entries, live.graduation.entry];
+  const cands = [], key = new Map(), idxOf = allEntries.map(() => []);
+  recs.forEach((rec, ti) => {
+    allEntries.forEach((en, ei) => {
+      const hit = G.replayEntry(rec, en, keep);
+      if (!hit) return;
+      const k = `${ti}:${hit.dt}`;
+      let ci = key.get(k);
+      if (ci === undefined) {
+        const p = G.pathAfter(rec, hit.dt + ex.delayMs, keep);
+        if (!p) return;
+        const refSol = rec.refSol || (ex.positionSizePct / 100) * base.startCapital;
+        const buy = S.quoteBuy(p.path[0][1], p.path[0][2], refSol, ex.feePct);
+        ci = cands.length; key.set(k, ci);
+        cands.push({ ti, ...p, buy: { ...buy, cost: refSol + ex.priorityFeeSol } });
+      }
+      idxOf[ei].push(ci);
+    });
+  });
+  report.candidates = cands.length;
+  const liveN = idxOf[allEntries.length - 1].length;
+  if (Math.max(...idxOf.map((x) => x.length)) < o.minTrades) return { ...report, status: 'insufficient', reason: `Zu wenig Daten: höchstens ${Math.max(0, ...idxOf.map((x) => x.length))}/${o.minTrades} Trades möglich (${recs.length} Tokens aufgezeichnet, aktuell ${liveN})` };
+
+  const times = recs.map((r) => r.startAt), splitTi = Math.floor(recs.length * o.trainFraction);
+  const hours = activeHours(times), trainHours = activeHours(times.slice(0, splitTi)), testHours = activeHours(times.slice(splitTi));
+  const exits = [];
+  for (const stopLossPct of [-5, -10, -15, -25]) for (const takeProfitPct of [0, 10, 20, 40])
+    for (const trailingActivationPct of [5, 10, 20]) for (const trailingDistancePct of [3, 6, 10])
+      for (const maxHoldMinutes of [1, 3, 10]) for (const stallExitSeconds of [0, 60]) for (const exitRealSol of [0, 75])
+        exits.push({ stopLossPct, takeProfitPct, trailingActivationPct, trailingDistancePct, maxHoldMinutes, stallExitSeconds, exitRealSol });
+  const N = cands.length, E = exits.length, out = new Float32Array(E * N);
+  for (let e = 0; e < E; e++) for (let i = 0; i < N; i++) out[e * N + i] = tradePct(cands[i], exits[e], ex);
+
+  let best = null; const byLevel = {};
+  entries.forEach((en, ei) => {
+    const idx = idxOf[ei];
+    if (idx.length < o.minTrades) return;
+    for (let e = 0; e < E; e++) {
+      let n = 0, sum = 0, trainSum = 0, trainN = 0; const off = e * N;
+      for (const i of idx) { const v = out[off + i]; if (v !== v) continue; n++; sum += v; if (cands[i].ti < splitTi) { trainSum += v; trainN++; } }
+      if (n < o.minTrades || n / hours < o.minTradesPerHour) continue;
+      const bl = byLevel[en.minRealSol];
+      if (!bl || sum / n > bl.avgPct) byLevel[en.minRealSol] = { avgPct: sum / n, n };
+      if (trainN >= 5 && (!best || trainSum > best.trainSum)) best = { trainSum, ei, e };
+    }
+  });
+  const sizeSol = (ex.positionSizePct / 100) * base.startCapital;
+  const describe = (vals, h) => { const st = stats(vals); return { ...st, perHour: st.n / h, solAt8pct: (st.sumPct / 100) * sizeSol }; };
+  const evalIdx = (idx, r) => { const tr = [], te = []; for (const i of idx) (cands[i].ti < splitTi ? tr : te).push(tradePct(cands[i], r, ex)); return { train: describe(tr, trainHours), test: describe(te, testHours), all: describe([...tr, ...te], hours) }; };
+  const current = evalIdx(idxOf[allEntries.length - 1], live.graduation.risk);
+  Object.assign(report, { status: 'ok', hours, current, byWindow: byLevel });
+  if (!best) return { ...report, status: 'no-valid', reason: `Keine Einstellung schafft ≥ ${o.minTrades} Trades und ≥ ${o.minTradesPerHour} Trades/h` };
+  const params = { graduation: { entry: entries[best.ei], risk: exits[best.e] } };
+  const res = evalIdx(idxOf[best.ei], exits[best.e]);
+  const tt = res.test.t.toFixed(1);
+  const ok = res.test.n >= 10 && res.test.avgPct > 0 && res.test.t >= o.minTestT && res.all.sumPct > current.all.sumPct;
+  return {
+    ...report, best: { params, ...res }, recommended: ok,
+    reason: ok ? `Besser als aktuell und im Test-Zeitraum deutlich profitabel (t=${tt})`
+      : res.test.n < 10 ? `Zu wenige Trades im Test-Zeitraum (${res.test.n}/10)`
+        : res.test.avgPct <= 0 ? 'Im Test-Zeitraum nicht profitabel – Zufallstreffer'
+          : res.test.t < o.minTestT ? `Im Test-Zeitraum nur knapp im Plus (t=${tt} < ${o.minTestT}) – kann Zufall sein`
+            : 'Nicht besser als die aktuelle Einstellung',
+  };
+}
+
 function loadConfigs() {
   const cfgPath = process.env.CONFIG ? path.resolve(process.env.CONFIG) : path.join(root, 'config.json');
   const base = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
@@ -170,17 +259,19 @@ function saveTuned(rep) {
 if (require.main === module) {
   const { base, live } = loadConfigs();
   const t0 = Date.now();
-  const rep = optimize(base, live);
+  const grad = base.strategy !== 'newTokens';
+  const rep = grad ? optimizeGrad(base, live) : optimize(base, live);
   rep.runtimeMs = Date.now() - t0;
   if (process.argv.includes('--json')) { process.stdout.write(JSON.stringify(rep)); process.exit(0); }
   const f = (s) => `${String(s.n).padStart(4)} Trades | ${s.perHour.toFixed(1).padStart(5)}/h | Ø ${s.avgPct.toFixed(2).padStart(6)}% | Win ${(s.winRate * 100).toFixed(0).padStart(3)}% | Summe ≈ ${s.solAt8pct.toFixed(3)} SOL`;
   console.log(`Tokens: ${rep.tokens}, Kandidaten: ${rep.candidates}${rep.hours ? `, aktive Zeit ${rep.hours.toFixed(1)} h` : ''}`);
   if (rep.status !== 'ok') { console.log(rep.reason); process.exit(0); }
-  console.log(`\nAKTUELL   (Einstieg nach ${live.filter.observeSeconds} s) alle:`, f(rep.current.all));
+  const label = grad ? (p) => `ab ${p.graduation.entry.minRealSol} SOL` : (p) => `Einstieg nach ${p.filter.observeSeconds} s`;
+  console.log(`\nAKTUELL   (${grad ? 'ab ' + live.graduation.entry.minRealSol + ' SOL' : 'Einstieg nach ' + live.filter.observeSeconds + ' s'}) alle:`, f(rep.current.all));
   console.log('          Test:', f(rep.current.test));
-  console.log(`\nOPTIMIERT (Einstieg nach ${rep.best.params.filter.observeSeconds} s) alle:`, f(rep.best.all));
+  console.log(`\nOPTIMIERT (${label(rep.best.params)}) alle:`, f(rep.best.all));
   console.log('          Test:', f(rep.best.test));
-  console.log('\nBestes Ø-Ergebnis je Einstiegszeitpunkt:', Object.entries(rep.byWindow).map(([w, b]) => `${w}s: ${b ? b.avgPct.toFixed(2) + '% (' + b.n + ')' : '-'}`).join(' · '));
+  console.log(`\nBestes Ø-Ergebnis je ${grad ? 'SOL-Stufe beim Einstieg' : 'Einstiegszeitpunkt'}:`, Object.entries(rep.byWindow).map(([w, b]) => `${w}${grad ? ' SOL' : 's'}: ${b ? b.avgPct.toFixed(2) + '% (' + b.n + ')' : '-'}`).join(' · '));
   console.log('\nParameter:', JSON.stringify(rep.best.params));
   console.log(`\nEmpfehlung: ${rep.recommended ? 'ÜBERNEHMEN' : 'nicht übernehmen'} – ${rep.reason} (${rep.runtimeMs} ms)`);
   if (process.argv.includes('--apply')) {
@@ -188,4 +279,4 @@ if (require.main === module) {
     else console.log('→ Nichts geschrieben.');
   }
 }
-module.exports = { optimize, loadConfigs, saveTuned };
+module.exports = { optimize, optimizeGrad, loadConfigs, saveTuned };
