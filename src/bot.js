@@ -21,6 +21,7 @@ class Bot {
     this.baseCfg = baseCfg;   // config.json: also the (looser) thresholds for research candidates
     this.tunedPath = path.join(this.dataDir, 'tuned.json');
     try { this.tuned = JSON.parse(fs.readFileSync(this.tunedPath, 'utf8')); } catch { this.tuned = null; }
+    if (this.tuned && this.tuned.strategyVersion !== S.STRATEGY_VERSION) { this.staleTuned = true; this.tuned = null; }
     this.cfg = S.mergeConfig(baseCfg, this.tuned); // live parameters
     this.logger = new Logger(baseCfg.logger, root);
     // Data source: free Solana blockchain feed (default), paid PumpPortal stream, or synthetic mock data.
@@ -55,8 +56,10 @@ class Bot {
   }
 
   start() {
-    this.logger.log('system', `Start – Version 4 (${this.mode === 'graduation' ? 'ältere Tokens: Mindestalter + Bundle-Filter' : 'neue Tokens'}), Paper-Trading, Kapital ${this.cfg.startCapital} SOL (SIMULATION, kein Wallet)`);
+    this.logger.log('system', `Start – Version 5 (${this.mode === 'graduation' ? 'ältere Tokens: nur bekannte Vorgeschichte + Whale-Filter' : 'neue Tokens'}), Paper-Trading, Kapital ${this.cfg.startCapital} SOL (SIMULATION, kein Wallet)`);
+    if (this.mode === 'graduation') this.loadScanner();
     if (this.tuned) this.logger.log('system', `Optimierte Parameter geladen: ${JSON.stringify(this.tuned.params)}`);
+    if (this.staleTuned) this.logger.log('system', 'Optimierte Werte einer älteren Version ignoriert – Startwerte aus config.json gelten');
     this.feed.on('create', (m) => this.scout(m));
     this.feed.on('trade', (m) => this.onTrade(m));
     this.feed.on('invalid', (m) => this.onInvalid(m));
@@ -75,7 +78,33 @@ class Bot {
     }
   }
 
-  stop() { this.recorder.finishAll(Date.now()); this.gradRec.finishAll(Date.now()); this.usage.save(); }
+  stop() { this.recorder.finishAll(Date.now()); this.gradRec.finishAll(Date.now()); this.usage.save(); if (this.mode === 'graduation') this.saveScanner(); }
+
+  // Wallet histories survive a restart (Strg + C): trades during the downtime are missing, which shows up as
+  // "unknown holdings" (curve sold more tokens than the wallets we know hold).
+  saveScanner() {
+    const now = Date.now(), keepMs = 3 * 3600000, out = [];
+    for (const st of this.scanner.values()) {
+      if (!st.holders || now - st.lastTrade > keepMs) continue;
+      out.push({ mint: st.mint, createdAt: st.createdAt, dev: st.dev, S: st.S, T: st.T, slot: st.slot, lastTrade: st.lastTrade,
+        holders: [...st.holders].filter(([, b]) => Math.abs(b) > 1e-9), firstBuy: st.firstBuy ? [...st.firstBuy] : [] });
+    }
+    try { fs.writeFileSync(path.join(this.dataDir, 'scanner.json'), JSON.stringify({ savedAt: now, states: out })); } catch {}
+  }
+  loadScanner() {
+    let d;
+    try { d = JSON.parse(fs.readFileSync(path.join(this.dataDir, 'scanner.json'), 'utf8')); } catch { return; }
+    const now = Date.now();
+    let n = 0;
+    for (const x of d.states || []) {
+      if (now - x.lastTrade > 3 * 3600000 || this.scanner.has(x.mint)) continue;
+      const st = G.newState(x.mint, true, x.createdAt, x.dev);
+      Object.assign(st, { S: x.S, T: x.T, real: x.S - G.OFFSET, slot: x.slot, lastTrade: x.lastTrade });
+      st.holders = new Map(x.holders); st.firstBuy = new Map(x.firstBuy);
+      this.scanner.set(x.mint, st); n++;
+    }
+    if (n) this.logger.log('system', `Wallet-Historie von ${n} Tokens geladen (seit ${Math.round((now - d.savedAt) / 60000)} min Pause)`);
+  }
 
   // A token stays subscribed while it is observed, held, or recorded as research candidate.
   release(t) {
@@ -212,9 +241,14 @@ class Bot {
       if (now - tr.since >= g.maxTrackMinutes * 60000) this.endTracking(mint, 'Zeit');
       else if (t && now - t.lastTrade >= g.inactiveMinutes * 60000) this.endTracking(mint, 'inaktiv');
     }
-    // forget curves without trades for 15 min (keeps the scanner small)
-    for (const [mint, st] of this.scanner) if (now - st.lastTrade > 15 * 60000 && !this.gradTracked.has(mint)) this.scanner.delete(mint);
-    this.agents.scout.state = `verfolgt ${this.gradTracked.size} · scannt ${this.scanner.size}`;
+    // forget quiet curves: tokens with known wallet history after 3 h, others after 15 min
+    for (const [mint, st] of this.scanner) {
+      if (this.gradTracked.has(mint)) continue;
+      if (now - st.lastTrade > (st.holders ? 3 * 3600000 : 15 * 60000)) this.scanner.delete(mint);
+    }
+    if (now - (this.lastScannerSave || 0) > 10 * 60000) { this.lastScannerSave = now; this.saveScanner(); } // also survives crashes
+    let known = 0; for (const st of this.scanner.values()) if (st.holders) known++;
+    this.agents.scout.state = `verfolgt ${this.gradTracked.size} · scannt ${this.scanner.size} (${known} mit Wallet-Historie)`;
   }
 
   reject(t, module, reason, extra = {}) {
@@ -313,7 +347,8 @@ class Bot {
     const e = this.cfg.executor;
     this.touch('executor', `verkaufe ${t.symbol}…`, 'Order läuft');
     await sleep(e.delayMs);
-    const out = this.liquidation(t, pos);
+    let out = this.liquidation(t, pos);
+    if (!Number.isFinite(out)) { this.logger.log('executor', `Ungültiger Kurs für ${t.symbol} – Verkauf als Totalverlust gewertet`, 'error'); out = 0; }
     const price = t.vSol / t.vTokens;
     this.cash += out;
     const pnl = out - pos.costSol, pnlPct = (pnl / pos.costSol) * 100;
@@ -390,7 +425,7 @@ class Bot {
     const sum = (s) => `${s.n} Trades, Ø ${fmt(s.avgPct, 2)}%, Win ${fmt(s.winRate * 100, 0)}%`;
     const msg = `Aktuell: ${sum(c.all)} | Optimiert: ${sum(b.all)} | Test: ${sum(b.test)}`;
     if (rep.recommended && this.baseCfg.optimizer.autoApply) {
-      fs.writeFileSync(this.tunedPath, JSON.stringify({ at: rep.at, params: b.params, test: b.test, all: b.all }, null, 2));
+      fs.writeFileSync(this.tunedPath, JSON.stringify({ at: rep.at, strategyVersion: S.STRATEGY_VERSION, params: b.params, test: b.test, all: b.all }, null, 2));
       this.tuned = JSON.parse(fs.readFileSync(this.tunedPath, 'utf8'));
       const merged = S.mergeConfig(this.baseCfg, this.tuned);
       Object.assign(this.cfg.filter, merged.filter); Object.assign(this.cfg.analyst, merged.analyst); Object.assign(this.cfg.risk, merged.risk);
@@ -429,7 +464,7 @@ class Bot {
     else for (const sec of ['filter', 'analyst', 'risk']) diff(this.cfg[sec], this.baseCfg[sec]);
     const a = this.cfg.analyst, r = grad ? g.risk : this.cfg.risk;
     const entryParams = grad
-      ? { minRealSol: g.entry.minRealSol, maxRealSol: g.entry.maxRealSol, lookbackSeconds: g.entry.lookbackSeconds, minNetSol: g.entry.minNetSol, minBuyers: g.entry.minBuyers, minSells: g.entry.minSells || 0, maxTopBuyerShare: g.entry.maxTopBuyerShare || 0, minAgeSeconds: g.entry.minAgeSeconds || 0, maxEarlyPct: g.entry.maxEarlyPct || 0, maxTopHolderPct: g.entry.maxTopHolderPct || 0, maxUnknownPct: g.entry.maxUnknownPct || 0 }
+      ? { minRealSol: g.entry.minRealSol, maxRealSol: g.entry.maxRealSol, lookbackSeconds: g.entry.lookbackSeconds, minNetSol: g.entry.minNetSol, minBuyers: g.entry.minBuyers, minSells: g.entry.minSells || 0, maxTopBuyerShare: g.entry.maxTopBuyerShare || 0, requireKnown: !!g.entry.requireKnown, minAgeSeconds: g.entry.minAgeSeconds || 0, maxEarlyPct: g.entry.maxEarlyPct || 0, maxTopHolderPct: g.entry.maxTopHolderPct || 0, maxUnknownPct: g.entry.maxUnknownPct || 0 }
       : { observeSeconds: this.cfg.filter.observeSeconds, minScore: a.minScore, minUniqueBuyers: a.minUniqueBuyers, maxPriceChangePct: a.maxPriceChangePct, maxTop10Pct: a.maxTop10Pct || 0 };
     return {
       connected: this.feed.connected, tradesBlocked: this.feed.tradesBlocked, mock: process.env.MOCK === '1',

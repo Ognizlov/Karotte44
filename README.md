@@ -33,11 +33,13 @@ Alternative (kostenpflichtig): `"source": "pumpportal"` in `config.json` – Pum
   Kauf, wenn die Kurve zwischen `minRealSol` und `maxRealSol` liegt **und** in den letzten `lookbackSeconds` starker Kaufdruck
   herrscht (Netto-Zufluss ≥ `minNetSol`, ≥ `minBuyers` Käufer, optional ≥ `minSells` Verkäufe gegen abgesprochene Pumps).
   Ausstieg: Stop-Loss, Take-Profit, Trailing-Stop, Haltezeit, keine Trades mehr, und Verkauf vor der Migration ab `exitRealSol`.
-  **Mindestalter** (`minAgeSeconds`, Standard 300 s): brandneue Tokens, die im ersten Block per Bundle auf 20+ SOL gekauft
-  werden, sind der klassische Rug. Für Tokens, die vor dem Bot-Start entstanden sind, gilt als Alter die Laufzeit des Bots.
+  **Nur bekannte Vorgeschichte** (`requireKnown`, Standard an): nur Tokens, deren Wallets der Bot seit der Erstellung
+  mitzählt – in 385 ausgewerteten Trades kamen 36 von 40 großen Verlusten (≤ −40 %) von Tokens mit unbekannter Vorgeschichte.
+  Die Wallet-Historie bleibt 3 h erhalten und wird beim Beenden in `data/scanner.json` gespeichert.
+  **Mindestalter** (`minAgeSeconds`, Standard aus). Für Tokens, die vor dem Bot-Start entstanden sind, gilt als Alter die Laufzeit des Bots.
   **Bundle-Filter** (`maxEarlyPct`): max. Bestand der Wallets, die in den ersten 3 s gekauft haben – 0 = aus.
   **Whale-Filter:** Für Tokens, die der Bot ab ihrer Erstellung gesehen hat, zählt er die Bestände jeder Wallet mit.
-  `maxTopHolderPct` (größte Wallet in % der Supply) und `maxUnknownPct` (Bestände aus nicht gesehenen Trades) – 0 = aus.
+  `maxTopHolderPct` (größte Wallet in % der Supply, Standard 15) und `maxUnknownPct` (Bestände aus nicht gesehenen Trades) – 0 = aus.
   Ist ein Filter aktiv, werden Tokens mit unbekannter Vorgeschichte übersprungen.
   Regeln in `src/gradstrategy.js`, Parameter unter `graduation` in `config.json`.
 - **`newTokens`: brandneue Tokens** in den ersten Sekunden (Pipeline unten).
@@ -64,6 +66,7 @@ Der Optimizer arbeitet für die aktive Strategie: Er spielt die aufgezeichneten 
 - Ausgewählt wird auf den älteren 70 % der Tokens; übernommen wird nur, wenn die Einstellung auch auf den
   neueren 30 % **deutlich** im Plus ist (t ≥ 1) und besser als die aktuelle ist. Sonst bleibt alles, wie es ist.
 - Übernommene Werte (auch die Beobachtungszeit) stehen in `data/tuned.json` und überschreiben `config.json`. Zurücksetzen: Datei löschen.
+  Werte aus einer älteren Strategie-Version werden ignoriert.
 - `npm.cmd run diagnose` analysiert die Trades der Strategie „ältere Tokens“: Verteilung, Alter beim Kauf, Kursverlauf direkt
   nach dem Einstieg, Merkmale der großen Verlierer und wer bei den Abstürzen verkauft hat.
 - `npm.cmd run optimize` zeigt den Bericht inkl. bestem Ergebnis je Einstiegszeitpunkt, `npm.cmd run report` fasst die bisherigen Trades zusammen.

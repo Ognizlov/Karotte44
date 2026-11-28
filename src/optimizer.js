@@ -175,10 +175,10 @@ function optimizeGrad(base, live) {
   // entry grid; every (token, entry rule) gives at most one entry, identical entries are simulated once
   const entries = [];
   for (const minRealSol of [25, 35, 45]) for (const lookbackSeconds of [30, 60]) for (const minNetSol of [2, 5])
-    for (const maxTopBuyerShare of [0, 0.3]) for (const minAgeSeconds of [0, 120, 300, 900])  // token age
-      for (const maxTopHolderPct of [0, 10]) for (const maxEarlyPct of [0, 30])               // whale / bundle filters
+    for (const maxTopBuyerShare of [0, 0.3]) for (const minAgeSeconds of [0, 300])            // token age
+      for (const requireKnown of [false, true]) for (const maxTopHolderPct of [0, 15, 10])    // known history / whale filter
         entries.push({ minRealSol, maxRealSol: minRealSol + 25, lookbackSeconds, minNetSol, minBuyers: 0, minSells: 0, maxTopBuyerShare,
-          minAgeSeconds, maxTopHolderPct, maxUnknownPct: 0, maxEarlyPct });
+          minAgeSeconds, requireKnown, maxTopHolderPct, maxUnknownPct: 0, maxEarlyPct: 0 });
   const allEntries = [...entries, live.graduation.entry];
   const cands = [], key = new Map(), idxOf = allEntries.map(() => []);
   recs.forEach((rec, ti) => {
@@ -189,7 +189,7 @@ function optimizeGrad(base, live) {
       let ci = key.get(k);
       if (ci === undefined) {
         const p = G.pathAfter(rec, hit.dt + ex.delayMs, keep);
-        if (!p) return;
+        if (!p || !p.path.length) return;
         const refSol = rec.refSol || (ex.positionSizePct / 100) * base.startCapital;
         const buy = S.quoteBuy(p.path[0][1], p.path[0][2], refSol, ex.feePct);
         ci = cands.length; key.set(k, ci);
@@ -255,7 +255,7 @@ function loadConfigs() {
 
 function saveTuned(rep) {
   fs.mkdirSync(dataDir, { recursive: true });
-  fs.writeFileSync(path.join(dataDir, 'tuned.json'), JSON.stringify({ at: rep.at, params: rep.best.params, test: rep.best.test, all: rep.best.all }, null, 2));
+  fs.writeFileSync(path.join(dataDir, 'tuned.json'), JSON.stringify({ at: rep.at, strategyVersion: S.STRATEGY_VERSION, params: rep.best.params, test: rep.best.test, all: rep.best.all }, null, 2));
 }
 
 if (require.main === module) {

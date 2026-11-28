@@ -173,11 +173,15 @@ function pathAfter(rec, fillMs) {
   const ev = firstEvent(rec);
   if (ev <= fillMs) return null;
   const end = Math.min(rec.endDt, ev);
+  if (end <= fillMs) return null; // recording ended before the fill
   return { path: [[0, S0, T0], ...path.filter((p) => p[0] <= end - fillMs)], endDt: end - fillMs, forced: ev < Infinity && ev <= rec.endDt };
 }
 
+// Optimizer results are only valid for the strategy version they were found with.
+const STRATEGY_VERSION = 5;
 // config.json + optimizer overrides (data/tuned.json) -> live parameters
 function mergeConfig(base, tuned) {
+  if (tuned && tuned.strategyVersion !== STRATEGY_VERSION) tuned = null;
   const c = JSON.parse(JSON.stringify(base));
   const tp = (tuned && tuned.params) || {};
   for (const sec of ['filter', 'analyst', 'risk']) Object.assign(c[sec], tp[sec] || {});
@@ -186,4 +190,4 @@ function mergeConfig(base, tuned) {
 }
 
 module.exports = { features, filterCheck, score, entryCheck, quoteBuy, quoteSell, priceExit, timeExit, describeExit, simulateExit,
-  newToken, applyTrade, replayAt, entryAt, pathAfter, mergeConfig };
+  newToken, applyTrade, replayAt, entryAt, pathAfter, mergeConfig, STRATEGY_VERSION };

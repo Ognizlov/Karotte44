@@ -24,6 +24,8 @@ for (const r of rows) {
     trades.push({ symbol, pnlSol: Number(pnlSol), pnlPct: Number(pnlPct), reason, score: b.score, heldS: b.time ? (Date.parse(time) - b.time) / 1000 : null });
   }
 }
+const invalid = trades.filter((t) => !Number.isFinite(t.pnlPct) || !Number.isFinite(t.pnlSol)).length;
+for (let i = trades.length - 1; i >= 0; i--) if (!Number.isFinite(trades[i].pnlPct) || !Number.isFinite(trades[i].pnlSol)) trades.splice(i, 1);
 if (!trades.length) { console.log('Noch keine abgeschlossenen Trades.'); process.exit(0); }
 const f = (x, d = 1) => (x >= 0 ? '+' : '') + x.toFixed(d);
 const sum = (a, k) => a.reduce((s, t) => s + t[k], 0);
@@ -47,3 +49,4 @@ let cands = 0;
 const dataDir = path.join(root, 'data');
 if (fs.existsSync(dataDir)) for (const x of fs.readdirSync(dataDir)) if (/^candidates-.*\.jsonl$/.test(x)) cands += fs.readFileSync(path.join(dataDir, x), 'utf8').split('\n').filter(Boolean).length;
 console.log(`\nAufgezeichnete Kandidaten für den Optimizer: ${cands}`);
+if (invalid) console.log(`(${invalid} Trades mit ungültigem Ergebnis aus älteren Versionen nicht mitgezählt)`);

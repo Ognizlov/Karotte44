@@ -68,7 +68,8 @@ function signal(st, now, en) {
   // only buys and no sells at all is typical for a coordinated pump right before a dump
   if (en.minSells > 0 && m.sells < en.minSells) return null;
   if (en.maxTopBuyerShare > 0 && m.topShare > en.maxTopBuyerShare) return null;
-  // older tokens only: brand-new launches that are bundled to 20+ SOL in their first block are the classic rug
+  // only tokens whose wallets the bot has followed since their creation (most rugs come from unknown histories)
+  if (en.requireKnown && !st.holders) return null;
   if (en.minAgeSeconds > 0 && ageMs(st, now) < en.minAgeSeconds * 1000) return null;
   if (en.maxTopHolderPct > 0 || en.maxUnknownPct > 0 || en.maxEarlyPct > 0) {
     const h = holderStats(st);
@@ -136,6 +137,7 @@ function pathAfter(rec, fillDt, keepMs) {
   if (!started) path.push([0, st.S, st.T]);
   if (fillDt >= stop) return null;
   const end = Math.min(rec.endDt, stop);
+  if (end <= fillDt) return null; // recording ended before the fill (e.g. bot stopped right after the signal)
   return { path: path.filter((p) => p[0] <= end - fillDt), endDt: end - fillDt, forced: stop < Infinity && stop <= rec.endDt };
 }
 
