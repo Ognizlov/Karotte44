@@ -39,7 +39,11 @@ for (const r of rows) {
   if (action === 'BUY' && /Graduation/.test(reason)) open.set(mint, { buyAt: Date.parse(time), sigAt: signalAt.get(mint) });
   if (action === 'SELL' && open.has(mint)) { const o = open.get(mint); trades.push({ mint, ...o, sellAt: Date.parse(time), pct: Number(pnlPct), reason }); open.delete(mint); }
 }
-if (!trades.length) { console.log('Noch keine Graduation-Trades (Strategie V3) in trades.csv.'); process.exit(0); }
+// optional: only the last N hours, e.g.  npm.cmd run diagnose -- --hours 24
+const hi = process.argv.indexOf('--hours');
+const sinceMs = hi > 0 ? Date.now() - Number(process.argv[hi + 1]) * 3600000 : 0;
+if (sinceMs) for (let i = trades.length - 1; i >= 0; i--) if (trades[i].buyAt < sinceMs) trades.splice(i, 1);
+if (!trades.length) { console.log('Noch keine Trades der Strategie „ältere Tokens“ im gewählten Zeitraum.'); process.exit(0); }
 
 const price = (S, T) => S / T;
 const f1 = (x) => (x === null || x === undefined || Number.isNaN(x) ? '   -  ' : (x >= 0 ? '+' : '') + x.toFixed(1));
@@ -88,6 +92,7 @@ function analyse(t) {
 const A = trades.map(analyse).filter(Boolean);
 const sum = (a, k) => a.reduce((s, x) => s + k(x), 0);
 console.log('=== Karotte44 Diagnose (Strategie: ältere Tokens / Graduation) ===');
+console.log(`Zeitraum: ${new Date(Math.min(...trades.map((x) => x.buyAt))).toLocaleString()} – ${new Date(Math.max(...trades.map((x) => x.buyAt))).toLocaleString()}${sinceMs ? ' (nur letzte ' + process.argv[hi + 1] + ' h)' : ''}`);
 console.log(`Trades: ${trades.length}, davon mit Aufzeichnung: ${A.length}, Ø ${f1(sum(trades, (x) => x.pct) / trades.length)}%`);
 const buckets = [['≤ -40 %', (p) => p <= -40], ['-40 bis -10 %', (p) => p > -40 && p <= -10], ['-10 bis 0 %', (p) => p > -10 && p <= 0], ['0 bis +10 %', (p) => p > 0 && p <= 10], ['> +10 %', (p) => p > 10]];
 console.log('\n-- Verteilung der Ergebnisse --');

@@ -71,13 +71,15 @@ function signal(st, now, en) {
   // only tokens whose wallets the bot has followed since their creation (most rugs come from unknown histories)
   if (en.requireKnown && !st.holders) return null;
   if (en.minAgeSeconds > 0 && ageMs(st, now) < en.minAgeSeconds * 1000) return null;
-  if (en.maxTopHolderPct > 0 || en.maxUnknownPct > 0 || en.maxEarlyPct > 0) {
+  if (en.maxTopHolderPct > 0 || en.maxUnknownPct > 0 || en.maxEarlyPct > 0 || en.maxDevPct > 0) {
     const h = holderStats(st);
     if (!h) return null; // token not seen from creation: wallet distribution unknown -> skip (conservative)
     if (en.maxTopHolderPct > 0 && h.topPct > en.maxTopHolderPct) return null;
     if (en.maxUnknownPct > 0 && h.unknownPct > en.maxUnknownPct) return null;
     // wallets that bought in the first 3 s (snipers / bundles) still holding a lot = they can dump on us
     if (en.maxEarlyPct > 0 && (h.earlyPct === null || h.earlyPct > en.maxEarlyPct)) return null;
+    // the creator still holding a large bag can dump it at any time
+    if (en.maxDevPct > 0 && (h.devPct === null || h.devPct > en.maxDevPct)) return null;
     m.holders = h;
   }
   return m;
@@ -86,7 +88,8 @@ function describeSignal(st, m, en) {
   const h = m.holders || holderStats(st);
   return `${st.real.toFixed(1)} SOL in der Kurve, letzte ${en.lookbackSeconds}s: netto ${m.net >= 0 ? '+' : ''}${m.net.toFixed(2)} SOL, ${m.buyers} Käufer, `
     + `${m.buys}/${m.sells} Käufe/Verkäufe, größter Käufer ${(m.topShare * 100).toFixed(0)}%`
-    + (h ? `, größte Wallet ${h.topPct.toFixed(1)}%, unbekannt ${h.unknownPct.toFixed(1)}%` + (h.earlyPct !== null ? `, Frühkäufer ${h.earlyPct.toFixed(0)}%` : '') : ', Wallets unbekannt')
+    + (h ? `, größte Wallet ${h.topPct.toFixed(1)}%, unbekannt ${h.unknownPct.toFixed(1)}%` + (h.earlyPct !== null ? `, Frühkäufer ${h.earlyPct.toFixed(0)}%` : '')
+      + (h.devPct !== null ? `, Dev ${h.devPct.toFixed(1)}%` : '') : ', Wallets unbekannt')
     + `, Alter ≥ ${Math.round(ageMs(st, st.lastTrade) / 1000)}s`;
 }
 
@@ -123,6 +126,46 @@ function replayEntry(rec, en, keepMs) {
   }
   return null;
 }
+// Fast optimizer path: replay a record ONCE and keep, for every moment a signal could be checked, the inputs
+// signal() looks at. firstSignal() then finds the entry for any parameter set with plain comparisons.
+// Must stay equivalent to replayEntry() (checked by the optimizer self-test).
+function signalRows(rec, keepMs, lookbacks, realMin, realMax) {
+  const st = replayState(rec), stop = firstEvent(rec), bufN = rec.bufN || 0, rows = [];
+  for (let i = 0; i < rec.trades.length; i++) {
+    const tr = rec.trades[i];
+    if (tr[0] >= stop) break;
+    apply(st, evOf(rec, tr), tr[0], keepMs, i >= bufN);
+    if (i < bufN - 1 || tr[0] < rec.trackDt) continue;
+    if (st.real < realMin || st.real > realMax) continue;
+    const mom = {};
+    for (const L of lookbacks) mom[L] = momentum(st, tr[0], L * 1000);
+    rows.push({ dt: tr[0], real: st.real, mom, known: !!st.holders, h: holderStats(st), age: ageMs(st, tr[0]) });
+  }
+  return rows;
+}
+function firstSignal(rows, en) {
+  const whale = en.maxTopHolderPct > 0 || en.maxUnknownPct > 0 || en.maxEarlyPct > 0 || en.maxDevPct > 0;
+  for (const r of rows) {
+    if (r.real < en.minRealSol || r.real > en.maxRealSol) continue;
+    const m = r.mom[en.lookbackSeconds];
+    if (m.net < en.minNetSol || m.buyers < en.minBuyers) continue;
+    if (en.minSells > 0 && m.sells < en.minSells) continue;
+    if (en.maxTopBuyerShare > 0 && m.topShare > en.maxTopBuyerShare) continue;
+    if (en.requireKnown && !r.known) continue;
+    if (en.minAgeSeconds > 0 && r.age < en.minAgeSeconds * 1000) continue;
+    if (whale) {
+      const h = r.h;
+      if (!h) continue;
+      if (en.maxTopHolderPct > 0 && h.topPct > en.maxTopHolderPct) continue;
+      if (en.maxUnknownPct > 0 && h.unknownPct > en.maxUnknownPct) continue;
+      if (en.maxEarlyPct > 0 && (h.earlyPct === null || h.earlyPct > en.maxEarlyPct)) continue;
+      if (en.maxDevPct > 0 && (h.devPct === null || h.devPct > en.maxDevPct)) continue;
+    }
+    return { dt: r.dt };
+  }
+  return null;
+}
+
 // Curve path after a fill at fillDt (path[0] = state at the fill), with the same slot ordering as live.
 function pathAfter(rec, fillDt, keepMs) {
   const st = newState(rec.mint), stop = firstEvent(rec), path = [];
@@ -141,4 +184,5 @@ function pathAfter(rec, fillDt, keepMs) {
   return { path: path.filter((p) => p[0] <= end - fillDt), endDt: end - fillDt, forced: stop < Infinity && stop <= rec.endDt };
 }
 
-module.exports = { OFFSET, isStandard, newState, ageMs, apply, holderStats, momentum, signal, describeSignal, replayState, evOf, replayEntry, pathAfter };
+module.exports = { OFFSET, isStandard, newState, ageMs, apply, holderStats, momentum, signal, describeSignal, replayState, evOf, replayEntry,
+  signalRows, firstSignal, pathAfter };

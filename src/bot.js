@@ -464,7 +464,7 @@ class Bot {
     else for (const sec of ['filter', 'analyst', 'risk']) diff(this.cfg[sec], this.baseCfg[sec]);
     const a = this.cfg.analyst, r = grad ? g.risk : this.cfg.risk;
     const entryParams = grad
-      ? { minRealSol: g.entry.minRealSol, maxRealSol: g.entry.maxRealSol, lookbackSeconds: g.entry.lookbackSeconds, minNetSol: g.entry.minNetSol, minBuyers: g.entry.minBuyers, minSells: g.entry.minSells || 0, maxTopBuyerShare: g.entry.maxTopBuyerShare || 0, requireKnown: !!g.entry.requireKnown, minAgeSeconds: g.entry.minAgeSeconds || 0, maxEarlyPct: g.entry.maxEarlyPct || 0, maxTopHolderPct: g.entry.maxTopHolderPct || 0, maxUnknownPct: g.entry.maxUnknownPct || 0 }
+      ? { minRealSol: g.entry.minRealSol, maxRealSol: g.entry.maxRealSol, lookbackSeconds: g.entry.lookbackSeconds, minNetSol: g.entry.minNetSol, minBuyers: g.entry.minBuyers, minSells: g.entry.minSells || 0, maxTopBuyerShare: g.entry.maxTopBuyerShare || 0, requireKnown: !!g.entry.requireKnown, minAgeSeconds: g.entry.minAgeSeconds || 0, maxEarlyPct: g.entry.maxEarlyPct || 0, maxDevPct: g.entry.maxDevPct || 0, maxTopHolderPct: g.entry.maxTopHolderPct || 0, maxUnknownPct: g.entry.maxUnknownPct || 0 }
       : { observeSeconds: this.cfg.filter.observeSeconds, minScore: a.minScore, minUniqueBuyers: a.minUniqueBuyers, maxPriceChangePct: a.maxPriceChangePct, maxTop10Pct: a.maxTop10Pct || 0 };
     return {
       connected: this.feed.connected, tradesBlocked: this.feed.tradesBlocked, mock: process.env.MOCK === '1',

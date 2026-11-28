@@ -103,7 +103,8 @@
       "maxTopHolderPct": 15,
       "maxUnknownPct": 0,
       "minAgeSeconds": 0,
-      "maxEarlyPct": 0
+      "maxEarlyPct": 0,
+      "maxDevPct": 0
     },
     "risk": {
       "stopLossPct": -10,

@@ -175,15 +175,22 @@ function optimizeGrad(base, live) {
   // entry grid; every (token, entry rule) gives at most one entry, identical entries are simulated once
   const entries = [];
   for (const minRealSol of [25, 35, 45]) for (const lookbackSeconds of [30, 60]) for (const minNetSol of [2, 5])
-    for (const maxTopBuyerShare of [0, 0.3]) for (const minAgeSeconds of [0, 300])            // token age
-      for (const requireKnown of [false, true]) for (const maxTopHolderPct of [0, 15, 10])    // known history / whale filter
-        entries.push({ minRealSol, maxRealSol: minRealSol + 25, lookbackSeconds, minNetSol, minBuyers: 0, minSells: 0, maxTopBuyerShare,
-          minAgeSeconds, requireKnown, maxTopHolderPct, maxUnknownPct: 0, maxEarlyPct: 0 });
+    for (const minAgeSeconds of [0, 300])                                                       // token age
+      for (const maxTopHolderPct of [0, 15, 10]) for (const maxEarlyPct of [0, 20]) for (const maxDevPct of [0, 6]) {
+        // whale / bundle / dev filters need the wallet history anyway -> only "known history" variants then
+        const filtered = maxTopHolderPct > 0 || maxEarlyPct > 0 || maxDevPct > 0;
+        for (const requireKnown of filtered ? [true] : [false, true])
+          entries.push({ minRealSol, maxRealSol: minRealSol + 25, lookbackSeconds, minNetSol, minBuyers: 0, minSells: 0, maxTopBuyerShare: 0,
+            minAgeSeconds, requireKnown, maxTopHolderPct, maxUnknownPct: 0, maxEarlyPct, maxDevPct });
+      }
   const allEntries = [...entries, live.graduation.entry];
   const cands = [], key = new Map(), idxOf = allEntries.map(() => []);
+  const lookbacks = [...new Set(allEntries.map((e) => e.lookbackSeconds))];
+  const realMin = Math.min(...allEntries.map((e) => e.minRealSol)), realMax = Math.max(...allEntries.map((e) => e.maxRealSol));
   recs.forEach((rec, ti) => {
+    const rows = G.signalRows(rec, keep, lookbacks, realMin, realMax); // replay once, then compare per parameter set
     allEntries.forEach((en, ei) => {
-      const hit = G.replayEntry(rec, en, keep);
+      const hit = G.firstSignal(rows, en);
       if (!hit) return;
       const k = `${ti}:${hit.dt}`;
       let ci = key.get(k);
