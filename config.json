@@ -100,7 +100,9 @@
       "minSells": 0,
       "maxTopBuyerShare": 0,
       "maxTopHolderPct": 0,
-      "maxUnknownPct": 0
+      "maxUnknownPct": 0,
+      "minAgeSeconds": 300,
+      "maxEarlyPct": 0
     },
     "risk": {
       "stopLossPct": -10,

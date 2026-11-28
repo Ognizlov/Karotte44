@@ -5,9 +5,15 @@ const CURVE_TOKENS0 = 1073000000; // standard curve: virtual tokens at creation
 const SUPPLY = 1000000000;
 const isStandard = (e) => e.vSol > 0 && e.realSol !== null && e.realSol !== undefined && Math.abs(e.vSol - e.realSol - OFFSET) < 1e-6;
 
-// holders: Map(wallet -> token balance) when the token was seen from its creation, otherwise undefined (unknown)
-function newState(mint, bornSeen = false) {
-  return { mint, S: 0, T: 0, real: 0, slot: 0, buf: [], lastTrade: 0, entered: false, holders: bornSeen ? new Map() : undefined };
+// holders: Map(wallet -> token balance) when the token was seen from its creation, otherwise undefined (unknown).
+// firstBuy: Map(wallet -> ms after creation of its first buy) – early buyers (snipers / bundles) are a rug risk.
+function newState(mint, bornSeen = false, createdAt = null, dev = null) {
+  return { mint, S: 0, T: 0, real: 0, slot: 0, buf: [], lastTrade: 0, entered: false,
+    holders: bornSeen ? new Map() : undefined, firstBuy: bornSeen ? new Map() : undefined, createdAt, dev,
+    ageRefAt: createdAt, ageRefMs: 0 }; // age(now) >= now - ageRefAt + ageRefMs (exact if seen from creation)
+}
+// Token age lower bound in ms (seen from creation: exact; otherwise at least the time since the bot started).
+function ageMs(st, now) { return st.ageRefAt === null || st.ageRefAt === undefined ? 0 : now - st.ageRefAt + (st.ageRefMs || 0);
 }
 
 // e: { isBuy, sol, tokens, user, vSol, vTokens, slot }. Curve state follows the newest slot; the buffer keeps recent trades.
@@ -15,6 +21,7 @@ function apply(st, e, now, keepMs, updateHolders = true) {
   if (!st.slot || !e.slot || e.slot >= st.slot) { st.S = e.vSol; st.T = e.vTokens; st.real = e.vSol - OFFSET; if (e.slot) st.slot = e.slot; }
   if (updateHolders && st.holders && e.tokens !== undefined) {
     st.holders.set(e.user, (st.holders.get(e.user) || 0) + (e.isBuy ? e.tokens : -e.tokens));
+    if (e.isBuy && st.firstBuy && !st.firstBuy.has(e.user) && st.createdAt !== null) st.firstBuy.set(e.user, now - st.createdAt);
   }
   st.buf.push([now, e.isBuy ? 1 : 0, e.sol, e.user, e]);
   let i = 0; const cut = now - keepMs;
@@ -25,12 +32,21 @@ function apply(st, e, now, keepMs, updateHolders = true) {
 
 // Wallet concentration (whale check). topPct: largest single wallet in % of supply.
 // unknownPct: tokens sold by the curve that we cannot attribute to a wallet we saw (missed trades) – could be one whale.
-function holderStats(st) {
+function holderStats(st, earlyMs = 3000) {
   if (!st.holders) return null;
-  let top = 0, known = 0;
-  for (const v of st.holders.values()) if (v > 0) { known += v; if (v > top) top = v; }
-  const sold = CURVE_TOKENS0 - st.T;
-  return { topPct: (top / SUPPLY) * 100, unknownPct: (Math.max(0, sold - known) / SUPPLY) * 100 };
+  let top = 0, known = 0, early = 0; const bals = [];
+  for (const [u, v] of st.holders) {
+    if (v <= 0) continue;
+    known += v; bals.push(v); if (v > top) top = v;
+    const fb = st.firstBuy && st.firstBuy.get(u);
+    if (fb !== undefined && fb <= earlyMs) early += v;
+  }
+  bals.sort((a, b) => b - a);
+  const top10 = bals.slice(0, 10).reduce((a, b) => a + b, 0), sold = CURVE_TOKENS0 - st.T;
+  const pct = (x) => (x / SUPPLY) * 100;
+  return { topPct: pct(top), top10Pct: pct(top10), unknownPct: pct(Math.max(0, sold - known)),
+    earlyPct: st.firstBuy && st.createdAt !== null ? pct(early) : null,   // held by wallets that bought in the first 3 s
+    devPct: st.dev ? pct(Math.max(0, st.holders.get(st.dev) || 0)) : null };
 }
 
 function momentum(st, now, lookbackMs) {
@@ -52,11 +68,15 @@ function signal(st, now, en) {
   // only buys and no sells at all is typical for a coordinated pump right before a dump
   if (en.minSells > 0 && m.sells < en.minSells) return null;
   if (en.maxTopBuyerShare > 0 && m.topShare > en.maxTopBuyerShare) return null;
-  if (en.maxTopHolderPct > 0 || en.maxUnknownPct > 0) {
+  // older tokens only: brand-new launches that are bundled to 20+ SOL in their first block are the classic rug
+  if (en.minAgeSeconds > 0 && ageMs(st, now) < en.minAgeSeconds * 1000) return null;
+  if (en.maxTopHolderPct > 0 || en.maxUnknownPct > 0 || en.maxEarlyPct > 0) {
     const h = holderStats(st);
     if (!h) return null; // token not seen from creation: wallet distribution unknown -> skip (conservative)
     if (en.maxTopHolderPct > 0 && h.topPct > en.maxTopHolderPct) return null;
     if (en.maxUnknownPct > 0 && h.unknownPct > en.maxUnknownPct) return null;
+    // wallets that bought in the first 3 s (snipers / bundles) still holding a lot = they can dump on us
+    if (en.maxEarlyPct > 0 && (h.earlyPct === null || h.earlyPct > en.maxEarlyPct)) return null;
     m.holders = h;
   }
   return m;
@@ -65,7 +85,8 @@ function describeSignal(st, m, en) {
   const h = m.holders || holderStats(st);
   return `${st.real.toFixed(1)} SOL in der Kurve, letzte ${en.lookbackSeconds}s: netto ${m.net >= 0 ? '+' : ''}${m.net.toFixed(2)} SOL, ${m.buyers} Käufer, `
     + `${m.buys}/${m.sells} Käufe/Verkäufe, größter Käufer ${(m.topShare * 100).toFixed(0)}%`
-    + (h ? `, größte Wallet ${h.topPct.toFixed(1)}%, unbekannt ${h.unknownPct.toFixed(1)}%` : ', Wallets unbekannt');
+    + (h ? `, größte Wallet ${h.topPct.toFixed(1)}%, unbekannt ${h.unknownPct.toFixed(1)}%` + (h.earlyPct !== null ? `, Frühkäufer ${h.earlyPct.toFixed(0)}%` : '') : ', Wallets unbekannt')
+    + `, Alter ≥ ${Math.round(ageMs(st, st.lastTrade) / 1000)}s`;
 }
 
 // ---- Replay of a recorded token ----
@@ -76,8 +97,16 @@ const firstEvent = (rec) => (rec.events || []).reduce((m, e) => Math.min(m, e[0]
 
 function replayState(rec) {
   const st = newState(rec.mint);
+  if (rec.ageAtStartMs !== undefined) { st.ageRefAt = 0; st.ageRefMs = rec.ageAtStartMs; } // record time base: ms after startAt
   // holders snapshot was taken after the buffered trades (incl. the one that started tracking)
-  if (rec.holders) st.holders = new Map(rec.holders.map(([u, b]) => [rec.users[u], b]));
+  if (rec.holders) {
+    st.holders = new Map(rec.holders.map(([u, b]) => [rec.users[u], b]));
+    if (rec.createdDt !== undefined && rec.createdDt !== null) {
+      st.createdAt = rec.createdDt; // record time base (ms relative to startAt)
+      st.firstBuy = new Map(rec.holders.filter((h) => h[2] !== undefined && h[2] !== null).map(([u, , fb]) => [rec.users[u], fb]));
+      st.dev = rec.dev !== undefined && rec.dev !== null ? rec.users[rec.dev] : null;
+    }
+  }
   return st;
 }
 
@@ -110,4 +139,4 @@ function pathAfter(rec, fillDt, keepMs) {
   return { path: path.filter((p) => p[0] <= end - fillDt), endDt: end - fillDt, forced: stop < Infinity && stop <= rec.endDt };
 }
 
-module.exports = { OFFSET, isStandard, newState, apply, holderStats, momentum, signal, describeSignal, replayEntry, pathAfter };
+module.exports = { OFFSET, isStandard, newState, ageMs, apply, holderStats, momentum, signal, describeSignal, replayState, evOf, replayEntry, pathAfter };

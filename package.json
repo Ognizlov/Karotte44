@@ -9,7 +9,8 @@
     "optimize": "node src/optimizer.js",
     "optimize:apply": "node src/optimizer.js --apply",
     "check": "node src/check.js",
-    "report": "node src/report.js"
+    "report": "node src/report.js",
+    "diagnose": "node src/diagnose.js"
   },
   "repository": {
     "type": "git",

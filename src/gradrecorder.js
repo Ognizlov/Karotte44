@@ -16,12 +16,20 @@ class GradRecorder {
   isActive(mint) { return this.active.has(mint); }
   // buffer: the scanner's recent trades [[timeMs, isBuy, sol, user, event]] incl. the one that started tracking.
   // holders: wallet balances after those trades (Map) if the token was seen from creation, else undefined.
-  start(mint, now, buffer, refSol, holders) {
+  start(mint, now, buffer, refSol, st) {
     const startAt = buffer.length ? buffer[0][0] : now;
     const r = { v: 'g2', mint, startAt, trackDt: now - startAt, bufN: buffer.length, refSol, users: [], uidx: new Map(), trades: [], events: [], holders: null };
     this.active.set(mint, r);
     for (const b of buffer) this.trade(mint, b[0], b[4]);
-    if (holders) r.holders = [...holders].filter(([, bal]) => Math.abs(bal) > 1e-9).map(([u, bal]) => [this.uid(r, u), bal]);
+    // token age (lower bound) at startAt, so the replay applies the same minimum-age rule as live
+    if (st && st.ageRefAt !== null && st.ageRefAt !== undefined) r.ageAtStartMs = startAt - st.ageRefAt + (st.ageRefMs || 0);
+    if (st && st.holders) {
+      // [userIdx, balance, firstBuyMsAfterCreation]; creation time and dev relative to this record
+      r.holders = [...st.holders].filter(([, bal]) => Math.abs(bal) > 1e-9)
+        .map(([u, bal]) => [this.uid(r, u), bal, st.firstBuy ? st.firstBuy.get(u) : undefined]);
+      if (st.createdAt !== null && st.createdAt !== undefined) r.createdDt = st.createdAt - startAt;
+      if (st.dev) r.dev = this.uid(r, st.dev);
+    }
   }
   uid(r, user) {
     let u = r.uidx.get(user);

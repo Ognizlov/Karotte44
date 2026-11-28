@@ -175,9 +175,10 @@ function optimizeGrad(base, live) {
   // entry grid; every (token, entry rule) gives at most one entry, identical entries are simulated once
   const entries = [];
   for (const minRealSol of [25, 35, 45]) for (const lookbackSeconds of [30, 60]) for (const minNetSol of [2, 5])
-    for (const minBuyers of [0, 10]) for (const maxTopBuyerShare of [0, 0.3])
-      for (const maxTopHolderPct of [0, 10, 5]) for (const maxUnknownPct of [0, 25]) // whale filter
-        entries.push({ minRealSol, maxRealSol: minRealSol + 25, lookbackSeconds, minNetSol, minBuyers, minSells: 0, maxTopBuyerShare, maxTopHolderPct, maxUnknownPct });
+    for (const maxTopBuyerShare of [0, 0.3]) for (const minAgeSeconds of [0, 120, 300, 900])  // token age
+      for (const maxTopHolderPct of [0, 10]) for (const maxEarlyPct of [0, 30])               // whale / bundle filters
+        entries.push({ minRealSol, maxRealSol: minRealSol + 25, lookbackSeconds, minNetSol, minBuyers: 0, minSells: 0, maxTopBuyerShare,
+          minAgeSeconds, maxTopHolderPct, maxUnknownPct: 0, maxEarlyPct });
   const allEntries = [...entries, live.graduation.entry];
   const cands = [], key = new Map(), idxOf = allEntries.map(() => []);
   recs.forEach((rec, ti) => {

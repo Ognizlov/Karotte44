@@ -55,7 +55,7 @@ class Bot {
   }
 
   start() {
-    this.logger.log('system', `Start – Version 3 (${this.mode === 'graduation' ? 'ältere Tokens + Whale-Filter' : 'neue Tokens'}), Paper-Trading, Kapital ${this.cfg.startCapital} SOL (SIMULATION, kein Wallet)`);
+    this.logger.log('system', `Start – Version 4 (${this.mode === 'graduation' ? 'ältere Tokens: Mindestalter + Bundle-Filter' : 'neue Tokens'}), Paper-Trading, Kapital ${this.cfg.startCapital} SOL (SIMULATION, kein Wallet)`);
     if (this.tuned) this.logger.log('system', `Optimierte Parameter geladen: ${JSON.stringify(this.tuned.params)}`);
     this.feed.on('create', (m) => this.scout(m));
     this.feed.on('trade', (m) => this.onTrade(m));
@@ -88,7 +88,7 @@ class Bot {
   scout(m) {
     if (this.mode !== 'newTokens') {
       // graduation: a token seen from its creation gets full wallet tracking (whale check later on)
-      if (m.mint && !this.scanner.has(m.mint)) { const st = G.newState(m.mint, true); st.lastTrade = Date.now(); this.scanner.set(m.mint, st); }
+      if (m.mint && !this.scanner.has(m.mint)) { const now = Date.now(); const st = G.newState(m.mint, true, now, m.traderPublicKey); st.lastTrade = now; this.scanner.set(m.mint, st); }
       return;
     }
     if (!m.mint || this.tokens.has(m.mint)) return;
@@ -163,7 +163,9 @@ class Bot {
     if (!G.isStandard(e)) return; // only standard SOL curves (no Mayhem mode, no other quote currency)
     const g = this.cfg.graduation, now = Date.now();
     let st = this.scanner.get(e.mint);
-    if (!st) { st = G.newState(e.mint, false); this.scanner.set(e.mint, st); } // seen mid-life: wallets unknown
+    if (!st) { // seen mid-life: wallets unknown, age at least the time since the bot started
+      st = G.newState(e.mint, false); st.ageRefAt = this.startedAt; this.scanner.set(e.mint, st);
+    }
     G.apply(st, e, now, g.bufferSeconds * 1000);
     let t = this.tokens.get(e.mint);
     if (!this.gradTracked.has(e.mint)) {
@@ -173,7 +175,7 @@ class Bot {
       this.tokens.set(e.mint, t);
       this.feed.watch(e.mint);
       this.gradTracked.set(e.mint, { since: now });
-      this.gradRec.start(e.mint, now, st.buf, this.positionSize(), st.holders);
+      this.gradRec.start(e.mint, now, st.buf, this.positionSize(), st);
       this.touch('scout', `verfolge ${t.symbol} (${st.real.toFixed(1)} SOL in der Kurve)`);
       this.logger.log('scout', `Verfolge ${t.symbol}… – ${st.real.toFixed(1)} SOL in der Kurve`);
     } else {
@@ -427,7 +429,7 @@ class Bot {
     else for (const sec of ['filter', 'analyst', 'risk']) diff(this.cfg[sec], this.baseCfg[sec]);
     const a = this.cfg.analyst, r = grad ? g.risk : this.cfg.risk;
     const entryParams = grad
-      ? { minRealSol: g.entry.minRealSol, maxRealSol: g.entry.maxRealSol, lookbackSeconds: g.entry.lookbackSeconds, minNetSol: g.entry.minNetSol, minBuyers: g.entry.minBuyers, minSells: g.entry.minSells || 0, maxTopBuyerShare: g.entry.maxTopBuyerShare || 0, maxTopHolderPct: g.entry.maxTopHolderPct || 0, maxUnknownPct: g.entry.maxUnknownPct || 0 }
+      ? { minRealSol: g.entry.minRealSol, maxRealSol: g.entry.maxRealSol, lookbackSeconds: g.entry.lookbackSeconds, minNetSol: g.entry.minNetSol, minBuyers: g.entry.minBuyers, minSells: g.entry.minSells || 0, maxTopBuyerShare: g.entry.maxTopBuyerShare || 0, minAgeSeconds: g.entry.minAgeSeconds || 0, maxEarlyPct: g.entry.maxEarlyPct || 0, maxTopHolderPct: g.entry.maxTopHolderPct || 0, maxUnknownPct: g.entry.maxUnknownPct || 0 }
       : { observeSeconds: this.cfg.filter.observeSeconds, minScore: a.minScore, minUniqueBuyers: a.minUniqueBuyers, maxPriceChangePct: a.maxPriceChangePct, maxTop10Pct: a.maxTop10Pct || 0 };
     return {
       connected: this.feed.connected, tradesBlocked: this.feed.tradesBlocked, mock: process.env.MOCK === '1',
